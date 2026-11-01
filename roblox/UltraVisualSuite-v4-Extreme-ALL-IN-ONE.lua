@@ -1,37 +1,37 @@
 --!strict
--- ULTRA VISUAL SUITE v4.0.0 | Standalone client-side visual controller
+-- ULTRA VISUAL SUITE v5.0.0 | Standalone client-side visual controller
 -- Standalone Luau build: no ModuleScript or RemoteEvent dependency.
 -- Intended for authorized client-side use only. No real DLSS/AI upscaling.
 -- No account data, HTTP requests, external services, or server persistence.
 -- Client lighting and material changes are best-effort and may be blocked by the engine.
 -- UI: F3 / glass launcher. Reflectance is skybox-based, NOT SSR.
--- Surface finishes intentionally change object materials client-side.
--- Game physics/texture/footsteps may differ while non-original finishes are enabled.
+-- Texture safe by design: original materials, SurfaceAppearance, textures, faces,
+-- clothing, decals, mesh IDs and physics are not replaced or overwritten.
 -- Files 01..14 are sequential code fragments; use the combined file to execute.
 
 local Config = (function()
 --!strict
--- Ultra Visual Suite 4.0 | Shared, data-only graphics configuration.
+-- Ultra Visual Suite 5.0 | Shared, data-only graphics configuration.
 local C = {}
 
 C.Order = {"Off", "Balanced", "Ultra", "High Ultra", "Max"}
 C.Presets = {
-    Off = {specular=0, diffuse=0, shadow=0, bloom=0, bloomSize=0, saturation=0, contrast=0, density=0, rays=0, dof=0, gloss=0},
-    Balanced = {specular=.7, diffuse=.75, shadow=.40, bloom=.20, bloomSize=18, saturation=.13, contrast=.12, density=.09, rays=.025, dof=0, gloss=.55},
-    Ultra = {specular=1, diffuse=.92, shadow=.28, bloom=.34, bloomSize=28, saturation=.24, contrast=.23, density=.12, rays=.045, dof=.012, gloss=.78},
-    ["High Ultra"] = {specular=1, diffuse=1, shadow=.18, bloom=.46, bloomSize=34, saturation=.32, contrast=.30, density=.15, rays=.065, dof=.018, gloss=.91},
-    Max = {specular=1, diffuse=1, shadow=.12, bloom=.58, bloomSize=42, saturation=.40, contrast=.37, density=.16, rays=.08, dof=.025, gloss=1},
+    Off = {specular=0,diffuse=0,shadow=0,bloom=0,bloomSize=0,saturation=0,contrast=0,density=0,rays=0,dof=0,gloss=0},
+    Balanced = {specular=.72,diffuse=.52,shadow=.32,bloom=.11,bloomSize=16,saturation=.05,contrast=.045,density=.075,rays=.015,dof=0,gloss=.55},
+    Ultra = {specular=.87,diffuse=.65,shadow=.26,bloom=.16,bloomSize=19,saturation=.065,contrast=.065,density=.09,rays=.027,dof=0,gloss=.76},
+    ["High Ultra"] = {specular=.96,diffuse=.72,shadow=.23,bloom=.20,bloomSize=21,saturation=.08,contrast=.08,density=.10,rays=.038,dof=0,gloss=.89},
+    Max = {specular=1,diffuse=.8,shadow=.21,bloom=.24,bloomSize=23,saturation=.095,contrast=.095,density=.11,rays=.045,dof=0,gloss=1},
 }
-C.FinishOrder = {"Original", "Wet Coat", "Mirror Chrome", "Glass Finish"}
--- "Mirror Chrome" is a material finish. Roblox still reflects the skybox,
--- not actual scene objects: no SSR or true planar reflections are provided.
+C.FinishOrder = {"Original", "Polished", "Wet Look", "Chrome Highlights"}
+-- These modes modify reflectance only. None swaps Metal, Glass or SmoothPlastic.
 
 C.TimeOrder = {"Auto", "Day", "Golden Hour", "Sunset", "Dusk", "Night", "Neon Night", "Cinematic", "Realistic"}
-C.WeatherOrder = {"Clear", "Overcast", "Foggy"}
+C.WeatherOrder = {"Clear", "Overcast", "Foggy", "Rainy"}
 C.Weather = {
     Clear = {density=1, haze=1, exposure=0},
-    Overcast = {density=1.4, haze=1.65, exposure=-.08},
-    Foggy = {density=1.95, haze=2.2, exposure=.03},
+    Overcast = {density=1.28, haze=1.4, exposure=.025},
+    Foggy = {density=1.65, haze=1.6, exposure=.06},
+    Rainy = {density=1.28, haze=1.28, exposure=.04},
 }
 -- Hour, ambient, outdoor, tint, exposure, bloom multiplier, haze.
 local function profile(hour: number, ambient: Color3, outdoor: Color3, tint: Color3, exposure: number, bloom: number, haze: number)
@@ -52,17 +52,20 @@ C.AutoKeys = {
     {hour=18.1, mode="Sunset"}, {hour=19, mode="Dusk"},
     {hour=20.5, mode="Night"}, {hour=24, mode="Night"},
 }
-C.FeatureOrder = {"Lighting", "Glossy", "AllObjects", "PBRVariants", "Bloom", "Colors", "Atmosphere", "Sharpness", "DOF", "Sky", "Water", "WetGround", "Lamps", "Characters", "Transparent", "Neon"}
-C.SliderOrder = {"Glossy", "Reflectance", "SurfaceStrength", "Specular", "Ambient", "Bloom", "GlowThreshold", "Saturation", "Contrast", "Density", "Exposure"}
+C.FeatureOrder = {"Lighting", "MapAdaptive", "Glossy", "AllObjects", "PBRVariants",
+    "Bloom", "Colors", "Atmosphere", "Sharpness", "DOF", "Sky", "Water", "WetGround", "Lamps",
+    "CharacterAccents", "Characters", "Transparent", "Neon", "SoftSunRays"}
+C.SliderOrder = {"Glossy", "Reflectance", "SurfaceStrength", "Specular", "Ambient", "ShadowLift",
+    "Bloom", "GlowThreshold", "Saturation", "Contrast", "Density", "Exposure", "WaterReflection", "WaterWaves", "BatchPace"}
 C.Defaults = {
-    -- Start Max but follow the actual game ClockTime; never force midday on a night scene.
-    preset="Max", mode="Auto", weather="Clear", finish="Wet Coat", adaptive=false,
-    features={Lighting=true, Glossy=true, AllObjects=true, PBRVariants=true, Bloom=true,
-        Colors=true, Atmosphere=true, Sharpness=true, DOF=true, Sky=true,
-        Water=true, WetGround=true, Lamps=false, Characters=false, Transparent=false, Neon=false,
-        ProtectTexturedMeshes=false, PreservePhysics=true},
-    sliders={Glossy=1, Reflectance=.91, SurfaceStrength=.85, Specular=1, Ambient=.43,
-        Bloom=.89, GlowThreshold=.53, Saturation=.85, Contrast=.85, Density=.35, Exposure=.46},
+    preset="Max",mode="Auto",weather="Clear",finish="Polished",adaptive=false,
+    features={Lighting=true,MapAdaptive=true,Glossy=true,AllObjects=true,PBRVariants=false,
+        Bloom=true,Colors=true,Atmosphere=true,Sharpness=true,DOF=false,Sky=false,
+        Water=true,WetGround=true,Lamps=false,CharacterAccents=true,
+        Characters=false,Transparent=false,Neon=false,SoftSunRays=true},
+    sliders={Glossy=.87,Reflectance=.68,SurfaceStrength=.72,Specular=.9,Ambient=.45,
+        ShadowLift=.78,Bloom=.6,GlowThreshold=.72,Saturation=.52,Contrast=.5,
+        Density=.35,Exposure=.53,WaterReflection=.48,WaterWaves=.4,BatchPace=.45},
 }
 
 function C.Copy(source: any): any
@@ -130,12 +133,12 @@ return C
 end)()
 
 
--- UltraVisualSuite v4: Part 02/14
+-- UltraVisualSuite v5: Part 02/14
 -- This is a continuation, not independently executable.
 
 local Controller = (function(Config)
 --!strict
--- Ultra Visual Suite 4.0 | The only graphics writer. Client-only controller.
+-- Ultra Visual Suite 5.0 | One texture-safe controller, staged scans and adaptive lighting.
 local Lighting = game:GetService("Lighting")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
@@ -153,7 +156,7 @@ local LP = {"Brightness","ClockTime","GeographicLatitude","Ambient","OutdoorAmbi
     "PrioritizeLightingQuality","Technology"}
 local AP = {"Density","Offset","Haze","Glare","Color","Decay"}
 local SP = {"CelestialBodiesShown","StarCount","MoonAngularSize","SunAngularSize"}
-local WP = {"WaterReflectance","WaterTransparency"}
+local WP = {"WaterReflectance","WaterTransparency","WaterColor","WaterWaveSize","WaterWaveSpeed"}
 local EFFECTS = {Bloom="BloomEffect",Color="ColorCorrectionEffect",Rays="SunRaysEffect",DOF="DepthOfFieldEffect",MenuBlur="BlurEffect"}
 local BASE_REFLECT = {
     [Enum.Material.Metal]=.16, [Enum.Material.DiamondPlate]=.14,
@@ -234,6 +237,9 @@ function Controller.new(settings: any): any
     self.trackedCount = 0
     self.replacedCount = 0
     self.materialFailures = 0
+    self.scanBusy=false;self.scanCount=0;self.scanQueued=0;self.scanBatchCount=0
+    self.skippedTextures=0
+    self.mapLighting={}
     self.pumping, self.scheduled, self.applying = false, false, false
     self.scanVersion = 0
     self.surfaceKey, self.lampKey = "", ""
@@ -244,6 +250,7 @@ function Controller.new(settings: any): any
     self.downgrade, self.lowSamples, self.highSamples = 0, 0, 0
     self.frames, self.seconds, self.fps = 0, 0, 60
     self.originalLighting = snap(Lighting, LP)
+    self.mapLighting = snap(Lighting, LP)
     self.originalWater = snap(Workspace.Terrain, WP)
     self.atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
     self.sky = Lighting:FindFirstChildOfClass("Sky")
@@ -266,7 +273,7 @@ function Controller.new(settings: any): any
     end
     self.folder = Instance.new("Folder")
     self.folder.Name = "UVS_Runtime"
-    self.folder:SetAttribute("Build", "4.0.0")
+    self.folder:SetAttribute("Build", "5.0.0")
     self.folder.Parent = Lighting
 
     table.insert(self.connections, Lighting.Changed:Connect(function(property)
@@ -279,7 +286,10 @@ function Controller.new(settings: any): any
             -- game time script on every frame.
             return
         end
-        if self.active and table.find(LP, property) then self:Schedule() end
+        if self.active and table.find(LP,property) then
+            self.mapLighting[property]=get(Lighting,property)
+            self:Schedule()
+        end
     end))
     table.insert(self.connections, Workspace.DescendantAdded:Connect(function(inst)
         if inst:IsA("BasePart") and self.active then self:Queue(inst) end
@@ -336,7 +346,8 @@ function Controller:Metrics(): any
     end
     return {fps=self.fps, preset=self.state.preset, effective=effective(self),
         finish=self.state.finish, replaced=self.replacedCount, failures=self.materialFailures,
-        effects=n, parts=self.trackedCount, comparing=self.comparing, photo=self.photo, testing=self.testing,
+        scanBusy=self.scanBusy or self.pumping,scanCount=self.scanCount,scanQueued=self.scanQueued,
+        skippedTextures=self.skippedTextures,effects=n, parts=self.trackedCount, comparing=self.comparing, photo=self.photo, testing=self.testing,
         clock=Lighting.ClockTime, exposure=Lighting.ExposureCompensation,
         colorActive=(self.effects.Color~=nil and self.effects.Color.Enabled==true),
         cameraEffect=(self.effects.Color~=nil and self.effects.Color.Parent==(Workspace.CurrentCamera or Lighting))}
@@ -402,7 +413,7 @@ end
 function Controller:Schedule()
     if self.scheduled or not self.alive then return end
     self.scheduled=true
-    task.delay(.16, function()
+    task.delay(.25, function()
         self.scheduled=false
         if self.alive then self:Apply() end
     end)
@@ -458,24 +469,15 @@ function Controller:Sky(): Sky
     return new
 end
 
--- UltraVisualSuite v4: Part 03/14
+-- UltraVisualSuite v5: Part 03/14
 -- This is a continuation, not independently executable.
 
 function Controller:RestorePart(part: BasePart)
     local old=self.parts[part]
     if old then
         if part.Parent then
-            put(part,"Material",old.material)
-            put(part,"MaterialVariant",old.variant)
             put(part,"Reflectance",old.reflectance)
-            if old.physicsTouched then
-                -- Unlike generic put(), nil is a valid restoration value here.
-                pcall(function() part.CustomPhysicalProperties=old.customPhysics end)
-                old.physicsTouched=false
-            end
-            if old.replaced then
-                self.replacedCount=math.max(0,self.replacedCount-1)
-            end
+            if old.variantApplied then put(part,"MaterialVariant",old.variant) end
         end
         self.parts[part]=nil
         self.trackedCount=math.max(0,self.trackedCount-1)
@@ -483,10 +485,10 @@ function Controller:RestorePart(part: BasePart)
 end
 function Controller:RestoreParts()
     self.scanVersion+=1
-    self.pending={}; self.pendingSet=setmetatable({}, {__mode="k"})
+    self.pending={};self.pendingSet=setmetatable({}, {__mode="k"})
+    self.scanBusy=false
     for part in pairs(self.parts) do self:RestorePart(part) end
-    self.surfaceKey=""
-    self.replacedCount=0
+    self.surfaceKey="";self.replacedCount=0
 end
 function Controller:RestoreLamps()
     for light, original in pairs(self.lamps) do
@@ -523,6 +525,7 @@ function Controller:Queue(part: BasePart)
     if not self.active or not part:IsDescendantOf(Workspace) or self.pendingSet[part] then return end
     self.pendingSet[part]=true
     table.insert(self.pending,part)
+    self.scanQueued+=1
     if self.pumping then return end
     self.pumping=true
     task.spawn(function()
@@ -530,11 +533,13 @@ function Controller:Queue(part: BasePart)
             local batch=self.pending
             self.pending={}
             self.pendingSet=setmetatable({}, {__mode="k"})
-            for i, entry in ipairs(batch) do
+            for i,entry in ipairs(batch) do
                 if not self.alive then break end
                 self:UpdatePart(entry)
-                if i%80==0 then task.wait() end
+                self.scanBatchCount+=1
+                if i%65==0 then task.wait(.008+self.state.sliders.BatchPace*.022) end
             end
+            task.wait()
         end
         self.pumping=false
     end)
@@ -542,18 +547,33 @@ end
 function Controller:ScanParts()
     self.scanVersion+=1
     local version=self.scanVersion
+    self.scanCount=0;self.scanQueued=0;self.scanBatchCount=0
+    self.skippedTextures=0;self.scanBusy=true
     task.spawn(function()
-        -- Tagged parts first, then ALL Workspace BaseParts, batched and yielding.
-        for _, inst in ipairs(CollectionService:GetTagged("UVS_Glossy")) do
-            if not self.alive or version~=self.scanVersion then return end
-            if inst:IsA("BasePart") then self:Queue(inst) end
-        end
-        for i, inst in ipairs(Workspace:GetDescendants()) do
-            if not self.alive or version~=self.scanVersion then return end
-            if inst:IsA("BasePart") then
-                self:Queue(inst)
+        -- Progressive breadth-first walk: no single giant GetDescendants allocation.
+        local list: {[number]: Instance}={[1]=Workspace}
+        local head,tail=1,1
+        while head<=tail and self.alive and version==self.scanVersion do
+            local node=list[head]
+            list[head]=nil
+            head+=1
+            if not node then continue end
+            for _,child in ipairs(node:GetChildren()) do
+                if not self.alive or version~=self.scanVersion then return end
+                self.scanCount+=1
+                if child:IsA("BasePart") then self:Queue(child) end
+                if #child:GetChildren()>0 then
+                    tail+=1;list[tail]=child
+                end
+                if self.scanCount%100==0 then
+                    self:Notify()
+                    task.wait(.008+self.state.sliders.BatchPace*.022)
+                end
             end
-            if i%250==0 then task.wait() end
+        end
+        if self.alive and version==self.scanVersion then
+            self.scanBusy=false
+            self:Notify()
         end
     end)
 end
@@ -561,108 +581,81 @@ function Controller:UpdatePart(part: BasePart)
     if not self.active or not part:IsDescendantOf(Workspace) then return end
     local f=self.state.features
     if (not f.Glossy and not f.WetGround) or CollectionService:HasTag(part,"UVS_Exclude") then
-        self:RestorePart(part); return
+        self:RestorePart(part);return
     end
-    if not f.Characters and isCharacter(part) then self:RestorePart(part); return end
-    if part.Transparency >= 1 or (part.Transparency >= .5 and not f.Transparent) then
-        self:RestorePart(part); return
+    if part.Transparency>=1 or (part.Transparency>.4 and not f.Transparent) then
+        self:RestorePart(part);return
     end
-    if part.Material == Enum.Material.Neon and not f.Neon then
-        self:RestorePart(part); return
+    if part.Material==Enum.Material.Neon and not f.Neon then
+        self:RestorePart(part);return
     end
-    -- Roblox Reflectance is based on the skybox/environment, not SSR.
-    -- For a visibly glossy result we optionally swap materials client-side.
-    -- This is intentionally aggressive and may replace the original texture.
-    local state=self.state
-    local base=if f.Glossy then (BASE_REFLECT[part.Material] or (if f.AllObjects then .17 else 0)) else 0
-    local wet=f.WetGround and self.night and WET[part.Material]==true and part.CFrame.UpVector.Y>.65
-    if wet then base=math.max(base,.17) end
-    if base<=0 then self:RestorePart(part); return end
-
+    local character=isCharacter(part)
+    if character then
+        if not f.Characters and not f.CharacterAccents then self:RestorePart(part);return end
+        if not f.Characters and not part:FindFirstAncestorOfClass("Accessory") then
+            self:RestorePart(part);return
+        end
+    end
+    local style=self.state.finish
+    if style=="Original" then self:RestorePart(part);return end
+    local material=part.Material
+    local textured=(part:IsA("MeshPart") and part.TextureID~="")
+        or part:FindFirstChildOfClass("SurfaceAppearance")~=nil
+        or part:FindFirstChildOfClass("Texture")~=nil
+        or part:FindFirstChildOfClass("Decal")~=nil
+    local base=BASE_REFLECT[material] or (if f.AllObjects then .065 else 0)
+    local wet=f.WetGround and (self.state.weather=="Rainy" or style=="Wet Look")
+        and WET[material]==true and part.CFrame.UpVector.Y>.65
+    if wet then base=math.max(base,.10) end
+    if base<=0 then self:RestorePart(part);return end
+    local p=Config.Presets[effective(self)]
+    local s=self.state.sliders
+    local scale=p.gloss*s.Glossy*(.35+s.SurfaceStrength*.85)
+    local amount=if style=="Polished" then .78 elseif style=="Wet Look" then 1.10 else 1.25
+    local target=base*scale*amount*(.45+s.Reflectance*1.05)
+    if material==Enum.Material.Metal or material==Enum.Material.DiamondPlate then
+        target=math.max(target,.14*scale*amount)
+    end
+    if wet then target=math.max(target,.19*scale) end
+    local cap=if style=="Chrome Highlights" then .48 else .32
+    if character then
+        cap=if textured then .085 else .16
+    elseif textured then
+        cap=math.min(cap,.18)
+    end
+    target=math.clamp(target,0,cap)
     local old=self.parts[part]
-    if old==nil then
-        old={reflectance=part.Reflectance, variant=part.MaterialVariant,
-            material=part.Material,customPhysics=part.CustomPhysicalProperties,
-            physicsTouched=false,replaced=false}
+    if not old then
+        old={reflectance=part.Reflectance,variant=part.MaterialVariant,variantApplied=false}
         self.parts[part]=old
         self.trackedCount+=1
     end
-
-    local name=effective(self)
-    local preset=Config.Presets[name]
-    local finish=state.finish
-    local actual=old.material
-    local isTextured=(part:IsA("MeshPart") and part.TextureID~="")
-        or part:FindFirstChildOfClass("SurfaceAppearance")~=nil
-    local overrideAllowed = f.Glossy and finish~="Original"
-        and (not f.ProtectTexturedMeshes or not isTextured)
-        and (not (part.Material==Enum.Material.Neon and not f.Neon))
-        and (not (part.Transparency>.05 and not f.Transparent))
-
-    if overrideAllowed then
-        if finish=="Wet Coat" then actual=Enum.Material.SmoothPlastic
-        elseif finish=="Mirror Chrome" then actual=Enum.Material.Metal
-        elseif finish=="Glass Finish" then actual=Enum.Material.Glass end
-    end
-
-    if actual~=old.material and f.PreservePhysics and not old.physicsTouched then
-        local ok, current=pcall(function() return part.CurrentPhysicalProperties end)
-        if ok and current then
-            old.physicsTouched=put(part,"CustomPhysicalProperties",PhysicalProperties.new(
-                current.Density,current.Friction,current.Elasticity,
-                current.FrictionWeight,current.ElasticityWeight
-            ))
-        end
-    elseif old.physicsTouched and (actual==old.material or not f.PreservePhysics) then
-        pcall(function() part.CustomPhysicalProperties=old.customPhysics end)
-        old.physicsTouched=false
-    end
-
-    local changed=put(part,"Material",actual)
-    local actuallyReplaced=part.Material~=old.material
-    if not changed and actual~=old.material then self.materialFailures+=1 end
-    if actuallyReplaced and not old.replaced then
-        old.replaced=true
-        self.replacedCount+=1
-    elseif not actuallyReplaced and old.replaced then
-        old.replaced=false
-        self.replacedCount=math.max(0,self.replacedCount-1)
-    end
-
-    local strength=preset.gloss*state.sliders.Glossy
-    local slider=state.sliders.Reflectance
-    -- Super-reflective skybox highlights. The cap is deliberate to avoid
-    -- turning all dark parts into white sheets in bright daylight.
-    local reflectBase=(if actual==Enum.Material.Metal then .42
-        elseif actual==Enum.Material.Glass then .37
-        elseif actual==Enum.Material.SmoothPlastic then .32
-        else base)
-    local target=math.clamp(reflectBase*(.6+1.2*slider)
-        * (.4+.8*state.sliders.SurfaceStrength)*strength,0,.88)
+    -- Never write Material, Color, Transparency, TextureID, SurfaceAppearance or physics.
     put(part,"Reflectance",math.max(old.reflectance,target))
-
-    -- Only an existing Studio-authored MaterialVariant can supply real
-    -- roughness/metalness maps. Such maps cannot be created by this script.
-    local variantName=VARIANTS[old.material]
-    if actual==old.material and f.PBRVariants and variantName and old.variant=="" then
-        local ok, variant=pcall(function()
-            return MaterialService:GetMaterialVariant(old.material,variantName)
-        end)
-        if ok and variant then put(part,"MaterialVariant",variantName)
-        else put(part,"MaterialVariant",old.variant) end
-    else
+    -- Opt-in only: Studio-authored material variants on explicitly tagged parts.
+    if f.PBRVariants and CollectionService:HasTag(part,"UVS_PBR")
+        and not textured and old.variant=="" then
+        local name=VARIANTS[material]
+        if name then
+            local ok,v=pcall(function()
+                return MaterialService:GetMaterialVariant(material,name)
+            end)
+            if ok and v then old.variantApplied=put(part,"MaterialVariant",name) end
+        end
+    elseif old.variantApplied then
         put(part,"MaterialVariant",old.variant)
+        old.variantApplied=false
     end
 end
 function Controller:SurfaceRefresh()
     local f=self.state.features
-    local key=table.concat({effective(self),tostring(f.Glossy),tostring(f.WetGround),
+    local key=table.concat({effective(self),self.state.finish,self.state.weather,
+        tostring(f.Glossy),tostring(f.WetGround),tostring(f.CharacterAccents),
         tostring(f.Characters),tostring(f.AllObjects),tostring(f.Neon),
         tostring(f.Transparent),tostring(f.PBRVariants),
-        tostring(f.ProtectTexturedMeshes),tostring(f.PreservePhysics),
-        tostring(self.state.finish),tostring(self.state.sliders.SurfaceStrength),tostring(self.night),
+        tostring(self.state.sliders.SurfaceStrength),
         tostring(self.state.sliders.Glossy),tostring(self.state.sliders.Reflectance)},"|")
-    if key~=self.surfaceKey then self.surfaceKey=key; self:ScanParts() end
+    if key~=self.surfaceKey then self.surfaceKey=key;self:ScanParts() end
 end
 function Controller:UpdateLamps()
     if not self.active or not self.state.features.Lamps then self:RestoreLamps(); return end
@@ -678,7 +671,7 @@ function Controller:UpdateLamps()
 end
 
 
--- UltraVisualSuite v4: Part 04/14
+-- UltraVisualSuite v5: Part 04/14
 -- This is a continuation, not independently executable.
 
 function Controller:Apply()
@@ -691,161 +684,170 @@ function Controller:Apply()
         return
     end
     local preset=Config.Presets[name]
-    local f, s=state.features, state.sliders
-    local fixed=(state.mode~="Auto" and state.mode~="Realistic")
-    if not fixed and self.lastFixed then
-        -- Unwind our own fixed ClockTime before following the game's time again.
-        put(Lighting,"ClockTime",self.sourceClock)
-    end
+    local f,s=state.features,state.sliders
+    local fixed=state.mode~="Auto" and state.mode~="Realistic"
+    if not fixed and self.lastFixed then put(Lighting,"ClockTime",self.sourceClock) end
     if not fixed then self.sourceClock=Lighting.ClockTime end
     local profile=Config.Profile(state.mode,self.sourceClock)
     local weather=Config.Weather[state.weather]
     self.night=profile.hour<6.5 or profile.hour>=18.5
-    self.lastFixed=fixed
-    self.active=true
-    self.applying=true
+    self.lastFixed=fixed;self.active=true;self.applying=true
     self.ownUntil=os.clock()+1.15
     self:StopTweens()
-    -- IMPORTANT: Preserve the game's own color/post effects. Overriding them
-    -- made the previous version visually indistinguishable in some experiences.
-    -- Our camera-local effects compose additively instead.
-
-    -- Keep the original values for every feature that is disabled.
     local originals=self.originalLighting
-    local lightingValues = {
-        Brightness=originals.Brightness,
-        Ambient=originals.Ambient,
-        OutdoorAmbient=originals.OutdoorAmbient,
-        ColorShift_Top=originals.ColorShift_Top,
-        ColorShift_Bottom=originals.ColorShift_Bottom,
-        EnvironmentSpecularScale=originals.EnvironmentSpecularScale,
-        EnvironmentDiffuseScale=originals.EnvironmentDiffuseScale,
-        ExposureCompensation=originals.ExposureCompensation,
-        ShadowSoftness=originals.ShadowSoftness,
+    local map=if f.MapAdaptive then self.mapLighting else originals
+    local values={
+        Brightness=map.Brightness,Ambient=map.Ambient,
+        OutdoorAmbient=map.OutdoorAmbient,ColorShift_Top=map.ColorShift_Top,
+        ColorShift_Bottom=map.ColorShift_Bottom,
+        EnvironmentSpecularScale=map.EnvironmentSpecularScale,
+        EnvironmentDiffuseScale=map.EnvironmentDiffuseScale,
+        ExposureCompensation=map.ExposureCompensation,
+        ShadowSoftness=map.ShadowSoftness,
     }
     if f.Lighting then
-        -- Night visibility correction: avoid pitch black interiors and boardwalks.
-        -- Min levels preserve artistic tone while giving observable results.
-        lightingValues.Brightness=if self.night then 2.7 else 2.55
-        local ambientBlend = .10 + s.Ambient * .45
-        lightingValues.Ambient=if self.night then
-            profile.ambient:Lerp(Color3.fromRGB(108,115,145),ambientBlend)
-            else profile.ambient:Lerp(Color3.fromRGB(73,76,87),s.Ambient*.38)
-        lightingValues.OutdoorAmbient=if self.night then
-            profile.outdoor:Lerp(Color3.fromRGB(137,148,176),ambientBlend)
-            else profile.outdoor:Lerp(Color3.fromRGB(150,153,164),s.Ambient*.30)
-        lightingValues.ColorShift_Top=Color3.fromRGB(255,249,237)
-        lightingValues.ColorShift_Bottom=Color3.fromRGB(11,13,20)
-        lightingValues.EnvironmentSpecularScale=math.clamp(preset.specular*(.25+s.Specular*.75),0,1)
-        lightingValues.EnvironmentDiffuseScale=preset.diffuse
-        lightingValues.ShadowSoftness=preset.shadow
-        lightingValues.ExposureCompensation=math.clamp(
-            profile.exposure+(s.Exposure-.5)*.8+weather.exposure
-            +(if self.night then .18 else -.13),-.8,.55)
+        values.Brightness=math.clamp((map.Brightness or 2)+(if self.night then .15 else .05),.15,5)
+        local a=map.Ambient or Color3.fromRGB(80,80,80)
+        local o=map.OutdoorAmbient or Color3.fromRGB(127,127,127)
+        local lift=(if self.night then .10 else .025)
+            +s.ShadowLift*(if self.night then .22 else .045)
+        local neutral=if self.night then Color3.fromRGB(127,137,160)
+            else Color3.fromRGB(135,135,136)
+        values.Ambient=a:Lerp(neutral,math.clamp(lift+s.Ambient*.035,0,.38))
+        values.OutdoorAmbient=o:Lerp(neutral,math.clamp(lift*.6,0,.27))
+        if fixed then
+            values.Ambient=values.Ambient:Lerp(profile.ambient,.18)
+            values.OutdoorAmbient=values.OutdoorAmbient:Lerp(profile.outdoor,.18)
+            put(Lighting,"ClockTime",profile.hour)
+        end
+        values.EnvironmentSpecularScale=math.clamp(
+            math.max(map.EnvironmentSpecularScale or 0,preset.specular*(.45+s.Specular*.5)),0,1)
+        values.EnvironmentDiffuseScale=math.clamp(
+            math.max(map.EnvironmentDiffuseScale or 0,preset.diffuse*(.45+s.Ambient*.55)),0,1)
+        values.ShadowSoftness=math.clamp((map.ShadowSoftness or .3)*.65+preset.shadow*.35,0,1)
+        values.ExposureCompensation=math.clamp((map.ExposureCompensation or 0)
+            +(s.Exposure-.5)*.36+(if self.night then .09 else .015)
+            +weather.exposure,-.65,.65)
         put(Lighting,"GlobalShadows",true)
-        -- LightingStyle/PrioritizeLightingQuality are RobloxScriptSecurity.
-        -- Ordinary client scripts cannot force them; we never fake the result.
-        -- Configure Realistic in Studio for owned experiences.
-        if fixed then put(Lighting,"ClockTime",profile.hour) end
     else
         put(Lighting,"GlobalShadows",originals.GlobalShadows)
-
         if f.Glossy then
-            lightingValues.EnvironmentSpecularScale=math.max(originals.EnvironmentSpecularScale or 0,preset.specular*s.Specular*.75)
+            values.EnvironmentSpecularScale=math.max(map.EnvironmentSpecularScale or 0,
+                preset.specular*s.Specular*.75)
         end
         if fixed then put(Lighting,"ClockTime",self.sourceClock) end
     end
-    self:Tween(Lighting,lightingValues,.65)
+    -- LightingStyle is restricted on ordinary client scripts. No fake Future API.
+    self:Tween(Lighting,values,.65)
 
-
--- UltraVisualSuite v4: Part 05/14
+-- UltraVisualSuite v5: Part 05/14
 -- This is a continuation, not independently executable.
 
     if f.Water then
-        put(Workspace.Terrain,"WaterReflectance",math.clamp(.55+preset.gloss*.42*s.Glossy,0,.95))
-        put(Workspace.Terrain,"WaterTransparency",if self.night then .22 else .34)
+        local water=self.originalWater
+        local reflect=math.clamp(math.max(
+            (water.WaterReflectance or .5)*.40,.10+.38*s.WaterReflection),.05,.56)
+        put(Workspace.Terrain,"WaterReflectance",reflect)
+        put(Workspace.Terrain,"WaterTransparency",
+            math.clamp(water.WaterTransparency or .3,.15,.8))
+        -- WaterColor remains exactly as the game configured it.
+        local rain=state.weather=="Rainy"
+        put(Workspace.Terrain,"WaterWaveSize",math.clamp(
+            (water.WaterWaveSize or 0)+s.WaterWaves*.08
+            +(if rain then .065 else 0),0,.55))
+        put(Workspace.Terrain,"WaterWaveSpeed",math.clamp(
+            (water.WaterWaveSpeed or 0)+(if rain then 4 else s.WaterWaves*2),0,50))
     else restore(Workspace.Terrain,self.originalWater) end
 
 
--- UltraVisualSuite v4: Part 06/14
+-- UltraVisualSuite v5: Part 06/14
 -- This is a continuation, not independently executable.
 
     if f.Bloom then
-        local effect=self:Effect("Bloom")
-        local intensity=preset.bloom*s.Bloom*profile.bloom
-        if self.night then intensity=math.min(intensity,.52)
-        else intensity=math.min(intensity,.62) end
-        if state.mode=="Neon Night" then intensity=math.min(intensity*1.2,.57) end
-        self:Tween(effect,{Intensity=intensity,Size=preset.bloomSize,
-            Threshold=math.clamp((if self.night then 1.08 else 1.10)-s.GlowThreshold*.45,.65,1.25)},.55)
-        effect.Enabled=true
+        local fx=self:Effect("Bloom")
+        local strength=math.clamp(preset.bloom*s.Bloom*profile.bloom,
+            0,if self.night then .18 else .22)
+        if state.mode=="Neon Night" then strength=math.min(strength*1.12,.22) end
+        self:Tween(fx,{Intensity=strength,Size=preset.bloomSize,
+            Threshold=math.clamp(1.35-s.GlowThreshold*.12,1.15,1.45)},.55)
+        fx.Enabled=true
     else self:DropEffect("Bloom") end
 
 
--- UltraVisualSuite v4: Part 07/14
+-- UltraVisualSuite v5: Part 07/14
 -- This is a continuation, not independently executable.
 
     if f.Colors or f.Sharpness then
-        local effect=self:Effect("Color")
-        local saturation=if f.Colors then preset.saturation*s.Saturation*1.15 else 0
-        local contrast=if f.Colors then preset.contrast*s.Contrast*1.14 else 0
-        if f.Sharpness then contrast+=.012 end
-        local tint=if f.Colors then profile.tint else Color3.new(1,1,1)
-        local brightness=if self.night then .025 else -.008
+        local fx=self:Effect("Color")
+        local sat=if f.Colors then preset.saturation*s.Saturation else 0
+        local contrast=if f.Colors then preset.contrast*s.Contrast else 0
+        if f.Sharpness then contrast+=.006 end -- Clarity feel only, not true sharpen.
+        local tint=if f.Colors and fixed
+            then Color3.new(1,1,1):Lerp(profile.tint,.20)
+            else Color3.new(1,1,1)
+        local bright=if self.night then .014 else .006
         if self.testing then
-            -- Deliberately unmistakable 3-second test: if invisible, renderer
-            -- or game code is suppressing camera-local post-processing.
-            saturation=.65
-            contrast=.35
-            brightness=.14
-            tint=Color3.fromRGB(255,150,225)
+            sat=.35;contrast=.17;bright=.06
+            tint=Color3.fromRGB(255,185,225)
         end
-        self:Tween(effect,{Saturation=math.clamp(saturation,0,.65),
-            Contrast=math.clamp(contrast,0,.53),Brightness=brightness,
-            TintColor=tint},.40)
-        effect.Enabled=true
+        self:Tween(fx,{Saturation=math.clamp(sat,0,.12),
+            Contrast=math.clamp(contrast,0,.125),Brightness=bright,TintColor=tint},.4)
+        fx.Enabled=true
     else self:DropEffect("Color") end
 
 
--- UltraVisualSuite v4: Part 08/14
+-- UltraVisualSuite v5: Part 08/14
 -- This is a continuation, not independently executable.
 
     if f.Atmosphere then
         local at=self:Atmosphere()
-        self:Tween(at,{Density=math.clamp(preset.density*(.28+s.Density*.8)*weather.density,.01,.34),
-            Offset=.18,Haze=math.clamp(profile.haze*weather.haze,0,3),
-            Glare=if self.night then .02 else .13,
-            Color=Color3.fromRGB(210,221,239),Decay=Color3.fromRGB(139,153,182)},.7)
-        local rays=self:Effect("Rays")
-        self:Tween(rays,{Intensity=if self.night then 0 else preset.rays,Spread=.65},.55)
-        rays.Enabled=true
+        local source=self.originalAtmosphere
+        local rain=state.weather=="Rainy"
+        local density=math.clamp((source and source.Density or preset.density)
+            *(if state.weather=="Clear" then 1 else weather.density)
+            +s.Density*(if rain then .028 else .012),.005,.38)
+        local haze=math.clamp((source and source.Haze or .65)
+            *(if state.weather=="Clear" then 1 else weather.haze),0,2.7)
+        self:Tween(at,{Density=density,Offset=(source and source.Offset or .12),
+            Haze=haze,Glare=if self.night then .025 else .12,
+            Color=(source and source.Color or Color3.fromRGB(204,215,235)),
+            Decay=(source and source.Decay or Color3.fromRGB(137,152,180))},.7)
+        if f.SoftSunRays then
+            local rays=self:Effect("Rays")
+            self:Tween(rays,{Intensity=if self.night then 0 else preset.rays,Spread=.68},.55)
+            rays.Enabled=true
+        else self:DropEffect("Rays") end
     else
         self:DropEffect("Rays")
         if self.atmosphere then
-            if self.createdAtmosphere then self.atmosphere:Destroy(); self.atmosphere=nil; self.createdAtmosphere=false
-            elseif self.originalAtmosphere then restore(self.atmosphere,self.originalAtmosphere) end
+            if self.createdAtmosphere then
+                self.atmosphere:Destroy();self.atmosphere=nil;self.createdAtmosphere=false
+            elseif self.originalAtmosphere then
+                restore(self.atmosphere,self.originalAtmosphere)
+            end
         end
     end
 
 
--- UltraVisualSuite v4: Part 09/14
+-- UltraVisualSuite v5: Part 09/14
 -- This is a continuation, not independently executable.
 
     if f.DOF or self.photo then
-        local effect=self:Effect("DOF")
-        self:Tween(effect,{FarIntensity=if self.photo then math.max(preset.dof,.12) else preset.dof,
-            NearIntensity=0, FocusDistance=80,InFocusRadius=if self.photo then 40 else 90},.6)
-        effect.Enabled=true
+        local fx=self:Effect("DOF")
+        self:Tween(fx,{FarIntensity=if self.photo then .045 else .01,
+            NearIntensity=0,FocusDistance=85,
+            InFocusRadius=if self.photo then 120 else 220},.6)
+        fx.Enabled=true
     else self:DropEffect("DOF") end
 
 
--- UltraVisualSuite v4: Part 10/14
+-- UltraVisualSuite v5: Part 10/14
 -- This is a continuation, not independently executable.
 
     if f.Sky then
         local sky=self:Sky()
         put(sky,"CelestialBodiesShown",true)
-        put(sky,"StarCount",if self.night then 2500 else 800)
+        put(sky,"StarCount",if self.night then 1600 else 400)
         put(sky,"MoonAngularSize",11)
         put(sky,"SunAngularSize",14)
     elseif self.sky then
@@ -861,7 +863,7 @@ function Controller:Apply()
 end
 
 
--- UltraVisualSuite v4: Part 11/14
+-- UltraVisualSuite v5: Part 11/14
 -- This is a continuation, not independently executable.
 
 function Controller:Sample(dt: number)
@@ -899,7 +901,7 @@ return Controller
 end)(Config)
 
 
--- UltraVisualSuite v4: Part 12/14
+-- UltraVisualSuite v5: Part 12/14
 -- This is a continuation, not independently executable.
 
 do
@@ -1044,7 +1046,7 @@ local title=text(panel,"ULTRA VISUAL SUITE",17)
 title.Position=UDim2.fromOffset(16,11)
 title.Size=UDim2.new(1,-73,0,26)
 title.Font=Enum.Font.GothamBold
-local subtitle=text(panel,"Extreme glossy / HDR-like grading | No true SSR",11)
+local subtitle=text(panel,"Texture-safe grading | No SSR / DLSS",11)
 subtitle.Position=UDim2.fromOffset(16,36)
 subtitle.Size=UDim2.new(1,-80,0,22)
 subtitle.TextColor3=Color3.fromRGB(149,158,181)
@@ -1079,7 +1081,7 @@ status.Font=Enum.Font.Code
 status.BackgroundColor3=Color3.fromRGB(31,34,51)
 status.BackgroundTransparency=0
 round(status,7)
-local hint=text(panel,qualityHint.." | Set 10 in Roblox Settings for sharper edges",10)
+local hint=text(panel,qualityHint.." | Set Manual Graphics Quality 10 for renderer detail",10)
 hint.Position=UDim2.new(0,14,1,-31)
 hint.Size=UDim2.new(1,-28,0,25)
 hint.TextColor3=Color3.fromRGB(153,166,193)
@@ -1142,7 +1144,7 @@ end
 options("GRAPHICS PRESET",{"Max","High Ultra","Ultra","Balanced","Off"},"preset",3)
 options("TIME / LIGHTING",Config.TimeOrder,"mode",3)
 options("WEATHER",Config.WeatherOrder,"weather",3)
-options("SURFACE FINISH (changes materials)",Config.FinishOrder,"finish",2)
+options("TEXTURE-SAFE SURFACE LOOK",Config.FinishOrder,"finish",2)
 heading("FEATURES")
 for i=1,#Config.FeatureOrder,2 do
     local r=row(35)
@@ -1162,7 +1164,7 @@ for i=1,#Config.FeatureOrder,2 do
 end
 
 
--- UltraVisualSuite v4: Part 13/14
+-- UltraVisualSuite v5: Part 13/14
 -- This is a continuation, not independently executable.
 
 heading("FINE TUNING")
@@ -1234,7 +1236,7 @@ reset.Activated:Connect(function()
 end)
 
 
--- UltraVisualSuite v4: Part 14/14
+-- UltraVisualSuite v5: Part 14/14
 -- This is a continuation, not independently executable.
 
 local function setPhoto(value: boolean)
@@ -1293,8 +1295,8 @@ local function render()
         end
     end
     compare.Text=if metric.comparing then "AFTER  |  Restore enhanced visuals" else "BEFORE  |  Compare original visuals"
-    status.Text=string.format("FPS %d | %s > %s | FX %d | Parts %d | Changed %d\nCamera %s | Time %.1f | Exposure %.2f",metric.fps,metric.preset,
-        metric.effective,metric.effects,metric.parts,metric.replaced,
+    status.Text=string.format("FPS %d | %s > %s | FX %d | Parts %d | Stage %s %d\nCamera %s | Time %.1f | Exposure %.2f",metric.fps,metric.preset,
+        metric.effective,metric.effects,metric.parts,(if metric.scanBusy then "SCANNING" else "READY"),metric.scanCount,
         (if metric.cameraEffect then "OK" else "OFF"),metric.clock,metric.exposure)
 end
 
@@ -1353,7 +1355,7 @@ end
 shutdown.OnInvoke=cleanup
 render()
 -- The UVS_Shutdown BindableFunction handles re-execution cleanup.
-print("[UVS v4] Loaded | preset:",graphics:GetState().preset,"mode:",graphics:GetState().mode,"finish:",graphics:GetState().finish)
-print("[UVS v4] F3 / VISUALS. Surface modes are real material changes, NOT SSR.")
+print("[UVS v5] Loaded | preset:",graphics:GetState().preset,"mode:",graphics:GetState().mode,"finish:",graphics:GetState().finish)
+print("[UVS v5] F3 / VISUALS. All finishes preserve texture maps; real SSR is unavailable.")
 
 end
