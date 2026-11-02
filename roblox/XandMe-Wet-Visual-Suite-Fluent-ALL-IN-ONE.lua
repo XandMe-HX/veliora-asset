@@ -1,5 +1,5 @@
 --!nocheck
--- XandMe Wet Visual Suite v1.0 | Fluent-inspired local graphics
+-- XandMe Wet Visual Suite v1.1 | Fluent-inspired local graphics
 -- Self-contained client Luau. Native Roblox effects, not SSR or neural upscaling.
 -- Install as a LocalScript in StarterPlayerScripts in owned games, or run client-side.
 -- Cleanup from old sessions is not possible if old scripts never exposed shutdown.
@@ -9,6 +9,7 @@ local Workspace=game:GetService("Workspace")
 local Lighting=game:GetService("Lighting")
 local UIS=game:GetService("UserInputService")
 local TweenService=game:GetService("TweenService")
+local HttpService=game:GetService("HttpService")
 local LocalPlayer=Players.LocalPlayer
 if not LocalPlayer then return end
 
@@ -35,7 +36,7 @@ wetRoot.Parent=Workspace
 
 local S={
     enabled=true,autoApply=true,
-    charEnabled=true,charReflectance=.32,
+    charEnabled=true,charReflectance=.45,charAccessoryBoost=.12,
     charMaterial=Enum.Material.SmoothPlastic,shinyAccessories=true,
     varnishEnabled=true,applyToFloors=true,applyToWalls=true,
     applyToNamedObjects=true,overlayReflectance=.08,
@@ -48,10 +49,173 @@ local S={
     atmosphereDensity=.27,atmosphereHaze=1.1,atmosphereGlare=.08,
     terrainWaterReflectance=.22,terrainWaterTransparency=.25,
     terrainWaterWaveSize=.16,terrainWaterWaveSpeed=14,
-    menuOpen=false,selectedTab="characters",
+    quality="Ultra",mode="Auto",menuOpen=false,selectedTab="looks",
 }
 Suite.Settings=S
 local status="Siap"
+
+-- Preset quality data. They adjust only existing, client-side visual settings.
+local QUALITY_ORDER={"Balanced","Ultra","High Ultra","Max","Off"}
+local QUALITY_PRESETS={
+    Balanced={charReflectance=.25,charAccessoryBoost=.05,
+        overlayReflectance=.04,overlayTransparency=.90,overlayDarkness=.07,
+        brightness=1.95,exposure=0,shadowSoftness=.32,bloomIntensity=.10,
+        bloomSize=20,contrast=.09,saturation=.08,
+        atmosphereDensity=.22,atmosphereHaze=.65},
+    Ultra={charReflectance=.45,charAccessoryBoost=.12,
+        overlayReflectance=.08,overlayTransparency=.83,overlayDarkness=.12,
+        brightness=2.25,exposure=.08,shadowSoftness=.22,bloomIntensity=.18,
+        bloomSize=30,contrast=.16,saturation=.12,
+        atmosphereDensity=.27,atmosphereHaze=1.1},
+    ["High Ultra"]={charReflectance=.60,charAccessoryBoost=.17,
+        overlayReflectance=.11,overlayTransparency=.83,overlayDarkness=.13,
+        brightness=2.35,exposure=.10,shadowSoftness=.17,bloomIntensity=.21,
+        bloomSize=32,contrast=.18,saturation=.15,
+        atmosphereDensity=.27,atmosphereHaze=1.13},
+    Max={charReflectance=.78,charAccessoryBoost=.23,
+        overlayReflectance=.15,overlayTransparency=.81,overlayDarkness=.14,
+        brightness=2.45,exposure=.12,shadowSoftness=.12,bloomIntensity=.24,
+        bloomSize=34,contrast=.19,saturation=.16,
+        atmosphereDensity=.28,atmosphereHaze=1.18},
+    Off={off=true},
+}
+local MODE_ORDER={"Auto","Day","Golden Hour","Sunset","Dusk",
+    "Night","Neon Night","Cinematic","Realistic"}
+local MODE_PROFILES={
+    Auto={clock=nil,ambient=Color3.fromRGB(90,96,108),
+        outdoor=Color3.fromRGB(132,138,150),tint=Color3.fromRGB(255,249,243),
+        exposure=0,bloom=1,contrast=0,saturation=0},
+    Day={clock=13,ambient=Color3.fromRGB(92,98,110),
+        outdoor=Color3.fromRGB(137,143,155),tint=Color3.fromRGB(255,251,247),
+        exposure=-.05,bloom=.85,contrast=.01,saturation=.02},
+    ["Golden Hour"]={clock=17.0,ambient=Color3.fromRGB(100,86,88),
+        outdoor=Color3.fromRGB(156,130,119),tint=Color3.fromRGB(255,219,185),
+        exposure=.035,bloom=1.15,contrast=.025,saturation=.035},
+    Sunset={clock=18.25,ambient=Color3.fromRGB(100,74,91),
+        outdoor=Color3.fromRGB(148,113,130),tint=Color3.fromRGB(255,200,193),
+        exposure=.12,bloom=1.20,contrast=.025,saturation=.05},
+    Dusk={clock=19.1,ambient=Color3.fromRGB(79,85,108),
+        outdoor=Color3.fromRGB(112,120,146),tint=Color3.fromRGB(219,228,255),
+        exposure=.22,bloom=1.03,contrast=.01,saturation=.015},
+    Night={clock=0.3,ambient=Color3.fromRGB(80,88,111),
+        outdoor=Color3.fromRGB(96,108,135),tint=Color3.fromRGB(221,230,255),
+        exposure=.30,bloom=1.1,contrast=.01,saturation=-.02},
+    ["Neon Night"]={clock=23.3,ambient=Color3.fromRGB(84,80,113),
+        outdoor=Color3.fromRGB(105,102,144),tint=Color3.fromRGB(240,225,255),
+        exposure=.30,bloom=1.55,contrast=.06,saturation=.09},
+    Cinematic={clock=nil,ambient=Color3.fromRGB(91,94,108),
+        outdoor=Color3.fromRGB(137,139,151),tint=Color3.fromRGB(255,244,232),
+        exposure=.06,bloom=1.16,contrast=.05,saturation=.03},
+    Realistic={clock=nil,ambient=Color3.fromRGB(88,91,100),
+        outdoor=Color3.fromRGB(130,134,144),tint=Color3.fromRGB(255,255,255),
+        exposure=0,bloom=.80,contrast=-.02,saturation=-.015},
+}
+
+-- Saved presets only contain whitelisted visual parameters.
+local SAVE_FIELDS={
+    "enabled","autoApply","charEnabled","charReflectance","charAccessoryBoost",
+    "shinyAccessories","varnishEnabled","applyToFloors","applyToWalls",
+    "applyToNamedObjects","overlayReflectance","overlayTransparency",
+    "overlayDarkness","overlayExpand","maxLayers","lightingEnabled",
+    "brightness","envSpecular","envDiffuse","exposure","shadowSoftness",
+    "bloomIntensity","bloomSize","bloomThreshold","contrast","saturation",
+    "ccBrightness","atmosphereDensity","atmosphereHaze","atmosphereGlare",
+    "terrainWaterReflectance","terrainWaterTransparency","terrainWaterWaveSize",
+    "terrainWaterWaveSpeed","quality","mode"
+}
+local FIELD_RANGES={
+    charReflectance={0,1},charAccessoryBoost={0,.6},
+    overlayReflectance={0,.4},overlayTransparency={.55,.98},
+    overlayDarkness={0,.35},overlayExpand={.01,.12},
+    maxLayers={100,1200},brightness={.5,4},envSpecular={0,1},
+    envDiffuse={0,1},exposure={-.5,.5},shadowSoftness={0,1},
+    bloomIntensity={0,.4},bloomSize={0,56},bloomThreshold={.5,2},
+    contrast={0,.4},saturation={0,.4},ccBrightness={-.1,.1},
+    atmosphereDensity={0,.6},atmosphereHaze={0,3},
+    atmosphereGlare={0,1},terrainWaterReflectance={0,1},
+    terrainWaterTransparency={0,1},terrainWaterWaveSize={0,1},
+    terrainWaterWaveSpeed={0,40}
+}
+local FILE_PATH="XandMe_WetVisualSuite_Presets_v1.json"
+local savedSlots={}
+local selectedSlot=1
+local selectedName="Preset Saya"
+local diskSaveAvailable=type(writefile)=="function" and type(readfile)=="function"
+local function snapshot()
+    local data={}
+    for _,key in ipairs(SAVE_FIELDS)do data[key]=S[key]end
+    data.charMaterial=S.charMaterial.Name
+    return data
+end
+local function applySnapshot(data)
+    if type(data)~="table" then return false end
+    for _,key in ipairs(SAVE_FIELDS)do
+        local value=data[key]
+        local current=S[key]
+        if type(current)=="number" and type(value)=="number" and value==value then
+            local bounds=FIELD_RANGES[key]
+            if bounds then
+                S[key]=clamp(value,bounds[1],bounds[2])
+            end
+        elseif type(current)=="boolean" and type(value)=="boolean" then
+            S[key]=value
+        elseif key=="mode" and type(value)=="string" and MODE_PROFILES[value] then
+            S[key]=value
+        elseif key=="quality" and type(value)=="string"
+            and (QUALITY_PRESETS[value] or value=="Custom") then
+            S[key]=value
+        end
+    end
+    if data.charMaterial=="Plastic" then
+        S.charMaterial=Enum.Material.Plastic
+    elseif data.charMaterial=="SmoothPlastic" then
+        S.charMaterial=Enum.Material.SmoothPlastic
+    end
+    return true
+end
+local function importSaved(container)
+    if type(container)~="table" then return end
+    local src=container.slots
+    if type(src)=="table" then
+        for i=1,3 do
+            local slot=src[tostring(i)]
+            if type(slot)=="table" and type(slot.data)=="table" then
+                local name=if type(slot.name)=="string" then slot.name else "Preset "..i
+                savedSlots[tostring(i)]={name=string.sub(name,1,32),data=slot.data}
+            end
+        end
+    end
+    local current=tonumber(container.selectedSlot)
+    if current then selectedSlot=clamp(math.floor(current),1,3)end
+    if container.autoLoad~=false then
+        local active=savedSlots[tostring(selectedSlot)]
+        if active then applySnapshot(active.data);selectedName=active.name end
+    end
+end
+local dataRead=false
+if diskSaveAvailable then
+    local ok,content=pcall(readfile,FILE_PATH)
+    if ok and type(content)=="string" then
+        local good,decoded=pcall(function()return HttpService:JSONDecode(content)end)
+        if good then importSaved(decoded);dataRead=true end
+    end
+end
+if not dataRead then
+    importSaved(rawget(_G,"XandMeWetVisualSuiteSaved"))
+end
+local function saveContainer()
+    local out={version=1,slots=savedSlots,selectedSlot=selectedSlot,autoLoad=true}
+    _G.XandMeWetVisualSuiteSaved=out
+    if diskSaveAvailable then
+        local ok,encoded=pcall(function()return HttpService:JSONEncode(out)end)
+        if ok then
+            local written=pcall(writefile,FILE_PATH,encoded)
+            if written then return true end
+        end
+    end
+    return false
+end
+
 local function track(conn) connections[#connections+1]=conn;return conn end
 local function clamp(x,a,b)return math.clamp(x,a,b)end
 local function safeGet(obj,key)
@@ -87,7 +251,7 @@ local function saveProps(obj,props,target)
     end
 end
 
-saveProps(Lighting,{"Brightness","EnvironmentDiffuseScale","EnvironmentSpecularScale",
+saveProps(Lighting,{"ClockTime","Brightness","EnvironmentDiffuseScale","EnvironmentSpecularScale",
     "ExposureCompensation","GlobalShadows","ShadowSoftness",
     "Ambient","OutdoorAmbient","ColorShift_Top","ColorShift_Bottom"},lightingOriginal)
 local Terrain=Workspace.Terrain
@@ -110,28 +274,31 @@ end
 
 local function applyLighting()
     if not Suite.Alive or not S.enabled or not S.lightingEnabled then return end
+    local profile=MODE_PROFILES[S.mode] or MODE_PROFILES.Auto
+    if profile.clock~=nil then safeSet(Lighting,"ClockTime",profile.clock) end
     safeSet(Lighting,"Brightness",S.brightness)
     safeSet(Lighting,"EnvironmentDiffuseScale",S.envDiffuse)
     safeSet(Lighting,"EnvironmentSpecularScale",S.envSpecular)
-    safeSet(Lighting,"ExposureCompensation",S.exposure)
+    safeSet(Lighting,"ExposureCompensation",
+        clamp(S.exposure+profile.exposure,-.5,.5))
     safeSet(Lighting,"GlobalShadows",true)
     safeSet(Lighting,"ShadowSoftness",S.shadowSoftness)
-    safeSet(Lighting,"Ambient",Color3.fromRGB(90,96,108))
-    safeSet(Lighting,"OutdoorAmbient",Color3.fromRGB(132,138,150))
-    safeSet(Lighting,"ColorShift_Top",Color3.fromRGB(255,244,232))
+    safeSet(Lighting,"Ambient",profile.ambient)
+    safeSet(Lighting,"OutdoorAmbient",profile.outdoor)
+    safeSet(Lighting,"ColorShift_Top",profile.tint)
     safeSet(Lighting,"ColorShift_Bottom",Color3.fromRGB(96,104,118))
 
     local bloom=getEffect("BloomEffect","XWM_Bloom")
     bloom.Enabled=true
-    bloom.Intensity=S.bloomIntensity
+    bloom.Intensity=clamp(S.bloomIntensity*profile.bloom,0,.4)
     bloom.Size=S.bloomSize
     bloom.Threshold=S.bloomThreshold
     local color=getEffect("ColorCorrectionEffect","XWM_Color")
     color.Enabled=true
     color.Brightness=S.ccBrightness
-    color.Contrast=S.contrast
-    color.Saturation=S.saturation
-    color.TintColor=Color3.fromRGB(255,249,243)
+    color.Contrast=clamp(S.contrast+profile.contrast,0,.4)
+    color.Saturation=clamp(S.saturation+profile.saturation,0,.4)
+    color.TintColor=profile.tint
 
     local at=Lighting:FindFirstChildOfClass("Atmosphere")
     if not at then
@@ -190,7 +357,13 @@ local function applyCharacterPart(part,model)
     if not S.shinyAccessories and accessoryAncestor(part,model) then return end
     rememberPart(part)
     safeSet(part,"Material",S.charMaterial)
-    safeSet(part,"Reflectance",S.charReflectance)
+    -- Nonlinear slider: left stays subtle, right produces strong glossy.
+    local raw=clamp(S.charReflectance,0,1)
+    local result=1-(1-raw)^1.6
+    if accessoryAncestor(part,model) then
+        result=clamp(result*(1+S.charAccessoryBoost),0,1)
+    end
+    safeSet(part,"Reflectance",result)
 end
 local function applyCharacter(model)
     if not model or not model.Parent then return end
@@ -313,8 +486,49 @@ local function fullApply()
     S.enabled=true
     applyLighting()
     scanCharacters()
+    refreshLayers()
     task.spawn(scanWet)
     status="Efek diterapkan"
+end
+local function applyQuality(name)
+    local preset=QUALITY_PRESETS[name]
+    if not preset then return end
+    S.quality=name
+    if preset.off then
+        S.enabled=false
+        clearLayers()
+        restoreCharacterOnly()
+        restoreLighting()
+        status="Quality Off"
+        return
+    end
+    for key,value in pairs(preset)do S[key]=value end
+    S.enabled=true
+    fullApply()
+    status="Quality "..name
+end
+local function applyMode(name)
+    if not MODE_PROFILES[name] then return end
+    local old=S.mode
+    S.mode=name
+    if name=="Auto" and old~="Auto" then
+        safeSet(Lighting,"ClockTime",lightingOriginal.ClockTime)
+    end
+    if S.enabled and S.lightingEnabled then applyLighting() end
+    status="Mode "..name
+end
+local function loadSelectedSlot()
+    local slot=savedSlots[tostring(selectedSlot)]
+    if not slot then status="Slot "..selectedSlot.." masih kosong";return end
+    applySnapshot(slot.data)
+    selectedName=slot.name
+    clearLayers()
+    restoreParts()
+    restoreLighting()
+    if S.enabled then fullApply()
+    else status="Preset dimuat dalam keadaan Off" end
+    status="Loaded: "..slot.name
+    saveContainer()
 end
 local function restoreAll()
     S.enabled=false
@@ -372,7 +586,7 @@ make("TextLabel",sidebar,{
     TextXAlignment=Enum.TextXAlignment.Left
 })
 local nav=make("Frame",sidebar,{
-    Position=UDim2.fromOffset(12,85),Size=UDim2.new(1,-24,0,245),
+    Position=UDim2.fromOffset(12,85),Size=UDim2.new(1,-24,0,330),
     BackgroundTransparency=1
 })
 make("UIListLayout",nav,{Padding=UDim.new(0,7)})
@@ -400,9 +614,11 @@ local statusLabel=make("TextLabel",content,{
 local pages={}
 local navButtons={}
 local names={
+    {"looks","Visual Modes"},
     {"characters","Characters"},
     {"varnish","Wet Overlay"},
     {"lighting","Lighting"},
+    {"presets","My Presets"},
     {"system","System"}
 }
 for _,item in ipairs(names)do
@@ -473,9 +689,12 @@ local redraw={}
 local activeSlider=nil
 local function syncControls()
     for _,func in ipairs(redraw)do func()end
-    statusLabel.Text=status
+    statusLabel.Text=string.format("%s  |  %s · %s",status,S.quality,S.mode)
 end
 local function changed(kind)
+    if kind=="char" or kind=="wet" or kind=="wetValues" or kind=="lighting" then
+        S.quality="Custom"
+    end
     if kind=="char" then
         if S.enabled and S.charEnabled then refreshKnownCharacters()
         else restoreCharacterOnly() end
@@ -602,10 +821,49 @@ local function slider(holder,label,key,minValue,maxValue,kind)
     draw()
 end
 
+local function optionGrid(holder,values,field,callback,columns)
+    local rows=math.ceil(#values/columns)
+    local frame=make("Frame",holder,{
+        Size=UDim2.new(1,0,0,rows*40),
+        BackgroundTransparency=1
+    })
+    make("UIGridLayout",frame,{
+        CellSize=UDim2.new(1/columns,-7,0,34),
+        CellPadding=UDim2.fromOffset(7,6),
+        SortOrder=Enum.SortOrder.LayoutOrder
+    })
+    for index,label in ipairs(values)do
+        local btn=make("TextButton",frame,{
+            Size=UDim2.new(1/columns,-7,0,34),
+            BackgroundColor3=muted,
+            Text=label,TextColor3=fg,
+            Font=Enum.Font.GothamMedium,TextSize=12,
+            LayoutOrder=index,AutoButtonColor=false
+        })
+        corner(btn,6)
+        local function draw()
+            local on=S[field]==label
+            btn.BackgroundColor3=if on then blue else muted
+            btn.BackgroundTransparency=if on then 0 else .28
+        end
+        redraw[#redraw+1]=draw
+        track(btn.Activated:Connect(function()
+            callback(label)
+            syncControls()
+        end))
+        draw()
+    end
+end
+local looks=section(pages.looks,"GRAPHICS QUALITY")
+optionGrid(looks,QUALITY_ORDER,"quality",applyQuality,2)
+local timeOptions=section(pages.looks,"TIME & CINEMATIC MODES")
+optionGrid(timeOptions,MODE_ORDER,"mode",applyMode,3)
+
 local a=section(pages.characters,"CHARACTER GLOSS")
 toggle(a,"Aktifkan player dan NPC","charEnabled","char")
 toggle(a,"Aksesori ikut mengilap","shinyAccessories","char")
-slider(a,"Reflectance karakter","charReflectance",0,.65,"char")
+slider(a,"Gloss karakter • maksimum","charReflectance",0,1,"char")
+slider(a,"Boost aksesori","charAccessoryBoost",0,.6,"char")
 rowButton(a,"Material SmoothPlastic",function()
     S.charMaterial=Enum.Material.SmoothPlastic
     changed("char")
@@ -650,6 +908,87 @@ slider(c,"Terrain Water Clarity","terrainWaterTransparency",0,1,"lighting")
 rowButton(c,"Terapkan pencahayaan",function()
     applyLighting();status="Pencahayaan diperbarui";syncControls()
 end)
+
+local presetSection=section(pages.presets,"SAVE / LOAD PERSONAL PRESET")
+local presetNameBox=make("TextBox",presetSection,{
+    Size=UDim2.new(1,0,0,37),BackgroundColor3=Color3.fromRGB(38,41,47),
+    Text=selectedName,PlaceholderText="Nama preset",
+    ClearTextOnFocus=false,TextColor3=fg,PlaceholderColor3=sub,
+    TextSize=13,Font=Enum.Font.Gotham,
+    TextXAlignment=Enum.TextXAlignment.Left
+})
+corner(presetNameBox,6)
+make("UIPadding",presetNameBox,{PaddingLeft=UDim.new(0,12),
+    PaddingRight=UDim.new(0,12)})
+local slotLabel=make("TextLabel",presetSection,{
+    Size=UDim2.new(1,0,0,23),BackgroundTransparency=1,
+    Text="",TextXAlignment=Enum.TextXAlignment.Left,
+    Font=Enum.Font.Gotham,TextSize=12,TextColor3=sub
+})
+local slotRow=make("Frame",presetSection,{
+    Size=UDim2.new(1,0,0,37),BackgroundTransparency=1
+})
+make("UIGridLayout",slotRow,{
+    CellSize=UDim2.new(1/3,-7,0,34),
+    CellPadding=UDim2.fromOffset(7,3),
+    SortOrder=Enum.SortOrder.LayoutOrder
+})
+for i=1,3 do
+    local slotNumber=i
+    local slotButton=make("TextButton",slotRow,{
+        Text="Slot "..i,Size=UDim2.new(1/3,-7,0,34),
+        Font=Enum.Font.GothamMedium,TextSize=13,
+        TextColor3=fg,BackgroundColor3=muted,
+        LayoutOrder=i,AutoButtonColor=false
+    })
+    corner(slotButton,6)
+    local function draw()
+        local selected=selectedSlot==slotNumber
+        slotButton.BackgroundColor3=if selected then blue else muted
+        slotLabel.Text=if savedSlots[tostring(selectedSlot)]
+            then ("Slot "..selectedSlot..": "..savedSlots[tostring(selectedSlot)].name)
+            else ("Slot "..selectedSlot..": kosong")
+    end
+    redraw[#redraw+1]=draw
+    track(slotButton.Activated:Connect(function()
+        selectedSlot=slotNumber
+        local entry=savedSlots[tostring(selectedSlot)]
+        presetNameBox.Text=if entry then entry.name else "Preset "..selectedSlot
+        syncControls()
+    end))
+    draw()
+end
+rowButton(presetSection,"Save ke slot terpilih",function()
+    local name=string.sub(presetNameBox.Text,1,32)
+    if string.match(name,"^%s*$") then name="Preset "..selectedSlot end
+    savedSlots[tostring(selectedSlot)]={name=name,data=snapshot()}
+    selectedName=name
+    local persistent=saveContainer()
+    status=if persistent then "Tersimpan lokal: "..name
+        else "Tersimpan sesi ini: "..name.." (file tidak didukung)"
+    syncControls()
+end)
+rowButton(presetSection,"Load slot terpilih",function()
+    loadSelectedSlot()
+    presetNameBox.Text=selectedName
+    syncControls()
+end,Color3.fromRGB(60,88,124))
+rowButton(presetSection,"Hapus slot",function()
+    savedSlots[tostring(selectedSlot)]=nil
+    local persistent=saveContainer()
+    status=if persistent then "Slot "..selectedSlot.." dihapus"
+        else "Slot sesi "..selectedSlot.." dihapus"
+    syncControls()
+end,Color3.fromRGB(125,65,80))
+local saveInfo=make("TextLabel",presetSection,{
+    Size=UDim2.new(1,0,0,50),BackgroundTransparency=1,
+    TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top,
+    TextXAlignment=Enum.TextXAlignment.Left,Font=Enum.Font.Gotham,
+    TextSize=11,TextColor3=sub,
+    Text=if diskSaveAvailable then
+        "Penyimpanan: file lokal executor (jika izin file tersedia). Slot terakhir dimuat otomatis pada eksekusi berikutnya."
+        else "Penyimpanan: sesi saja. Executor tidak menyediakan readfile/writefile; preset tidak dijamin tersimpan setelah aplikasi ditutup."
+})
 
 local d=section(pages.system,"SYSTEM")
 toggle(d,"Aktifkan suite","enabled","system")
@@ -833,4 +1172,4 @@ showTab(S.selectedTab)
 syncControls()
 fullApply()
 syncControls()
-print("[XandMe Wet Visual Suite v1.0] Active. Press F3 or click the V button.")
+print("[XandMe Wet Visual Suite v1.1] Modes and saved presets ready. Press F3 or V.")
