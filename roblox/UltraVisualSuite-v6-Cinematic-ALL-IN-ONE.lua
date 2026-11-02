@@ -1184,6 +1184,7 @@ for index=1,3 do
     line.Position=UDim2.fromOffset(12,13+(index-1)*10)
     line.BackgroundColor3=Color3.fromRGB(225,235,248)
     line.BorderSizePixel=0
+    line.ZIndex=11
     line.Parent=launcher
     local knob=Instance.new("Frame")
     knob.Name="Knob"..index
@@ -1191,6 +1192,7 @@ for index=1,3 do
     knob.Position=UDim2.fromOffset((if index==2 then 26 elseif index==1 then 18 else 31),11+(index-1)*10)
     knob.BackgroundColor3=Color3.fromRGB(108,185,230)
     knob.BorderSizePixel=0
+    knob.ZIndex=12
     knob.Parent=launcher
     local knobCorner=Instance.new("UICorner")
     knobCorner.CornerRadius=UDim.new(1,0)
