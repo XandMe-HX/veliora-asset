@@ -1011,7 +1011,7 @@ local function round(inst: Instance, amount: number)
 end
 local function border(inst: Instance)
     local s=Instance.new("UIStroke")
-    s.Color=Color3.fromRGB(128,112,215)
+    s.Color=Color3.fromRGB(98,116,139)
     s.Transparency=.65
     s.Thickness=1
     s.Parent=inst
@@ -1041,7 +1041,7 @@ local function button(parent: Instance, content: string): TextButton
     b.AutoButtonColor=true
     b.Selectable=true
     b.Parent=parent
-    round(b,8)
+    round(b,6)
     return b
 end
 
@@ -1049,37 +1049,26 @@ local launcher=button(ui,"VISUALS  |  F3")
 launcher.AnchorPoint=Vector2.new(1,0)
 launcher.Position=UDim2.new(1,-12,0,12)
 launcher.Size=UDim2.fromOffset(142,39)
-launcher.BackgroundColor3=Color3.fromRGB(29,31,53)
+launcher.BackgroundColor3=Color3.fromRGB(26,33,46)
 launcher.BackgroundTransparency=.16
 border(launcher)
-local launcherGradient=Instance.new("UIGradient")
-launcherGradient.Color=ColorSequence.new(Color3.fromRGB(255,255,255),Color3.fromRGB(226,221,250))
-launcherGradient.Rotation=35
-launcherGradient.Parent=launcher
-
+-- Solid launcher: restrained, no gradient.
 local panel=Instance.new("Frame")
 panel.Name="SettingsPanel"
 panel.AnchorPoint=Vector2.new(.5,.5)
 panel.Position=UDim2.fromScale(.5,.5)
 panel.Size=UDim2.fromOffset(388,570)
-panel.BackgroundColor3=Color3.fromRGB(21,24,43)
-panel.BackgroundTransparency=.12
+panel.BackgroundColor3=Color3.fromRGB(20,25,35)
+panel.BackgroundTransparency=.05
 panel.BorderSizePixel=0
 panel.Visible=false
 panel.ClipsDescendants=true
 panel.Parent=ui
-round(panel,18)
+round(panel,12)
 border(panel)
 -- Glass aesthetic: translucent surface, cool-to-violet gradient, soft outline.
 -- This is a UI simulation, NOT a CSS-style region-limited backdrop blur.
-local panelGradient=Instance.new("UIGradient")
-panelGradient.Rotation=110
-panelGradient.Color=ColorSequence.new({
-    ColorSequenceKeypoint.new(0,Color3.fromRGB(27,34,57)),
-    ColorSequenceKeypoint.new(.55,Color3.fromRGB(23,24,40)),
-    ColorSequenceKeypoint.new(1,Color3.fromRGB(41,31,67))
-})
-panelGradient.Parent=panel
+-- Deliberately flat panel; no decorative gradient.
 local glassAccent=Instance.new("Frame")
 glassAccent.Name="GlassAccent"
 glassAccent.BackgroundColor3=Color3.fromRGB(164,146,255)
@@ -1088,12 +1077,7 @@ glassAccent.BorderSizePixel=0
 glassAccent.Position=UDim2.fromOffset(18,60)
 glassAccent.Size=UDim2.new(1,-36,0,1)
 glassAccent.Parent=panel
-local accentGradient=Instance.new("UIGradient")
-accentGradient.Transparency=NumberSequence.new({
-    NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(.3,.12),
-    NumberSequenceKeypoint.new(.7,.12),NumberSequenceKeypoint.new(1,1)
-})
-accentGradient.Parent=glassAccent
+-- Subtle 1px divider; no glow gradients.
 local scale=Instance.new("UIScale")
 scale.Parent=panel
 
@@ -1104,7 +1088,7 @@ title.Font=Enum.Font.GothamBold
 local subtitle=text(panel,"Cinematic | texture-safe | no fake SSR / DLSS",11)
 subtitle.Position=UDim2.fromOffset(16,36)
 subtitle.Size=UDim2.new(1,-80,0,22)
-subtitle.TextColor3=Color3.fromRGB(149,158,181)
+subtitle.TextColor3=Color3.fromRGB(165,178,197)
 local close=button(panel,"X")
 close.Size=UDim2.fromOffset(33,31)
 close.Position=UDim2.new(1,-44,0,14)
@@ -1116,24 +1100,25 @@ local currentTab="LOOKS"
 local tabBar=Instance.new("Frame")
 tabBar.Name="Tabs"
 tabBar.Position=UDim2.fromOffset(11,66)
-tabBar.Size=UDim2.new(1,-22,0,37)
+tabBar.Size=UDim2.new(1,-22,0,70)
 tabBar.BackgroundTransparency=1
 tabBar.Parent=panel
-local barLayout=Instance.new("UIListLayout")
-barLayout.FillDirection=Enum.FillDirection.Horizontal
-barLayout.Padding=UDim.new(0,4)
+local barLayout=Instance.new("UIGridLayout")
+barLayout.CellSize=UDim2.new(1/3,-7,0,30)
+barLayout.CellPadding=UDim2.fromOffset(5,5)
+barLayout.SortOrder=Enum.SortOrder.LayoutOrder
 barLayout.Parent=tabBar
 for _,tab in ipairs(tabs) do
     tabMembers[tab]={}
     local b=button(tabBar,tab)
-    b.Size=UDim2.new(1/#tabs,-4,0,32)
-    b.TextSize=9
+    b.Size=UDim2.new(1/3,-7,0,30)
+    b.TextSize=11
     b.LayoutOrder=#tabButtons+1
     table.insert(tabButtons,{name=tab,button=b})
 end
 local scroll=Instance.new("ScrollingFrame")
-scroll.Position=UDim2.fromOffset(13,108)
-scroll.Size=UDim2.new(1,-26,1,-188)
+scroll.Position=UDim2.fromOffset(13,143)
+scroll.Size=UDim2.new(1,-26,1,-223)
 scroll.BackgroundTransparency=1
 scroll.ScrollBarThickness=4
 scroll.ScrollBarImageColor3=Color3.fromRGB(145,124,232)
@@ -1172,6 +1157,7 @@ photoExit.BackgroundColor3=Color3.fromRGB(23,26,43)
 
 local order=0
 local controls={}
+local GuiService=game:GetService("GuiService")
 local function tagTab(item: GuiObject, tab: string?)
     local group=tab or currentTab
     table.insert(tabMembers[group],item)
@@ -1258,7 +1244,7 @@ end
 heading("FINE TUNING")
 for _,name in ipairs(Config.SliderOrder) do
     local box=Instance.new("Frame")
-    box.Size=UDim2.new(1,-3,0,49)
+    box.Size=UDim2.new(1,-3,0,57)
     box.BackgroundTransparency=1
     box.LayoutOrder=nextOrder()
     box.Parent=scroll
@@ -1268,39 +1254,61 @@ for _,name in ipairs(Config.SliderOrder) do
     elseif name=="Density" or name=="Haze" or name=="FogDistance" or name=="SunRays" then target="FOG"
     elseif name=="BatchPace" then target="SYSTEM" end
     tagTab(box,target)
-    local label=text(box,name,11)
-    label.Size=UDim2.new(1,0,0,20)
+    local label=text(box,name,12)
+    label.Size=UDim2.new(1,0,0,22)
     local bar=Instance.new("Frame")
-    bar.Size=UDim2.new(1,-12,0,9)
-    bar.Position=UDim2.fromOffset(6,30)
-    bar.BackgroundColor3=Color3.fromRGB(51,55,75)
+    bar.Name="Track"
+    bar.Size=UDim2.new(1,-18,0,8)
+    bar.Position=UDim2.fromOffset(9,37)
+    bar.BackgroundColor3=Color3.fromRGB(56,68,84)
     bar.Active=true
     bar.Parent=box
-    round(bar,5)
+    round(bar,4)
     local fill=Instance.new("Frame")
+    fill.Name="Fill"
     fill.Size=UDim2.fromScale(.5,1)
-    fill.BackgroundColor3=Color3.fromRGB(150,118,249)
+    fill.BackgroundColor3=Color3.fromRGB(132,163,198)
     fill.BorderSizePixel=0
     fill.Parent=bar
-    round(fill,5)
+    round(fill,4)
+    local thumb=Instance.new("Frame")
+    thumb.Name="Thumb"
+    thumb.Size=UDim2.fromOffset(15,15)
+    thumb.AnchorPoint=Vector2.new(.5,.5)
+    thumb.Position=UDim2.fromScale(.5,.5)
+    thumb.BackgroundColor3=Color3.fromRGB(231,238,247)
+    thumb.BorderSizePixel=0
+    thumb.Parent=bar
+    round(thumb,8)
     local hit=Instance.new("TextButton")
-    hit.Size=UDim2.new(1,0,0,27)
-    hit.Position=UDim2.fromOffset(0,-9)
+    hit.Name="DragHandle"
+    hit.Size=UDim2.new(1,20,0,32)
+    hit.Position=UDim2.fromOffset(-10,-12)
     hit.BackgroundTransparency=1
     hit.Text=""
+    hit.Selectable=true
     hit.Parent=bar
+    local function preview(value: number)
+        fill.Size=UDim2.fromScale(value,1)
+        thumb.Position=UDim2.fromScale(value,.5)
+        label.Text=string.format("%s   %.1f%%",name,value*100)
+    end
     local function update(x: number)
-        local width=math.max(1,bar.AbsoluteSize.X)
-        local value=math.clamp((x-bar.AbsolutePosition.X)/width,0,1)
-        change("sliders",name,math.floor(value*100+.5)/100)
+        if bar.AbsoluteSize.X<=0 then return end
+        local value=math.clamp((x-bar.AbsolutePosition.X)/bar.AbsoluteSize.X,0,1)
+        preview(value)
+        change("sliders",name,value)
     end
     hit.InputBegan:Connect(function(input)
-        if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
-            activeDrag={name=name,input=input,update=update}
+        if activeDrag then return end
+        local kind=input.UserInputType
+        if kind==Enum.UserInputType.MouseButton1 or kind==Enum.UserInputType.Touch then
+            scroll.ScrollingEnabled=false
+            activeDrag={name=name,input=input,touch=kind==Enum.UserInputType.Touch,update=update}
             update(input.Position.X)
         end
     end)
-    table.insert(controls,{type="slider",key=name,fill=fill,label=label})
+    table.insert(controls,{type="slider",key=name,fill=fill,thumb=thumb,label=label,hit=hit})
 end
 
 heading("TOOLS")
@@ -1402,32 +1410,50 @@ local function render()
         elseif entry.type=="slider" then
             local value=state.sliders[entry.key]
             entry.fill.Size=UDim2.fromScale(value,1)
-            entry.label.Text=string.format("%s   %d%%",entry.key,math.floor(value*100+.5))
+            entry.thumb.Position=UDim2.fromScale(value,.5)
+            entry.label.Text=string.format("%s   %.1f%%",entry.key,value*100)
         elseif entry.type=="adaptive" then
             entry.button.Text="Adaptive performance: "..(if state.adaptive then "ON" else "OFF")
             entry.button.BackgroundColor3=if state.adaptive then Color3.fromRGB(93,75,168) else Color3.fromRGB(38,41,58)
         end
     end
     compare.Text=if metric.comparing then "AFTER  |  Restore enhanced visuals" else "BEFORE  |  Compare original visuals"
-    status.Text=string.format("FPS %d | %s > %s | FX %d | Parts %d | Stage %s %d\nCamera %s | Time %.1f | Exposure %.2f",metric.fps,metric.preset,
-        metric.effective,metric.effects,metric.parts,(if metric.scanBusy then "SCANNING" else "READY"),metric.scanCount,
-        (if metric.cameraEffect then "OK" else "OFF"),metric.clock,metric.exposure)
+    status.Text=string.format("FPS %d | %s | FX %d | Ref props %d/%d\n%s %d | Camera %s | Specular %.2f",metric.fps,metric.preset,
+        metric.effects,metric.reflectActive,metric.parts,
+        (if metric.scanBusy then "SCANNING" else "READY"),metric.scanCount,
+        (if metric.cameraEffect then "OK" else "OFF"),game:GetService("Lighting").EnvironmentSpecularScale)
 end
 
 table.insert(connections,graphics.changed.Event:Connect(render))
 table.insert(connections,UIS.InputChanged:Connect(function(input)
     if not activeDrag then return end
-    if input.UserInputType==Enum.UserInputType.MouseMovement or
-        (input.UserInputType==Enum.UserInputType.Touch and input==activeDrag.input) then
+    if (not activeDrag.touch and input.UserInputType==Enum.UserInputType.MouseMovement)
+        or (activeDrag.touch and input.UserInputType==Enum.UserInputType.Touch
+            and input==activeDrag.input) then
         activeDrag.update(input.Position.X)
     end
 end))
 table.insert(connections,UIS.InputEnded:Connect(function(input)
-    if activeDrag and (input==activeDrag.input or input.UserInputType==Enum.UserInputType.MouseButton1) then
+    if not activeDrag then return end
+    local same=if activeDrag.touch then input==activeDrag.input
+        else input.UserInputType==Enum.UserInputType.MouseButton1
+    if same then
+        activeDrag.update(input.Position.X)
         activeDrag=nil
+        scroll.ScrollingEnabled=true
     end
 end))
 table.insert(connections,UIS.InputBegan:Connect(function(input,processed)
+    if input.KeyCode==Enum.KeyCode.Left or input.KeyCode==Enum.KeyCode.Right
+        or input.KeyCode==Enum.KeyCode.DPadLeft or input.KeyCode==Enum.KeyCode.DPadRight then
+        for _,item in ipairs(controls) do
+            if item.type=="slider" and GuiService.SelectedObject==item.hit then
+                local direction=if input.KeyCode==Enum.KeyCode.Left or input.KeyCode==Enum.KeyCode.DPadLeft then -1 else 1
+                change("sliders",item.key,math.clamp(graphics:GetState().sliders[item.key]+direction*.02,0,1))
+                return
+            end
+        end
+    end
     if processed then return end
     if input.KeyCode==Enum.KeyCode.F3 or input.KeyCode==Enum.KeyCode.ButtonStart then
         if photo then setPhoto(false) else setOpen(not open) end
@@ -1441,7 +1467,7 @@ local function viewport()
     local camera=Workspace.CurrentCamera
     if not camera then return end
     local size=camera.ViewportSize
-    scale.Scale=math.clamp(math.min(size.X/425,size.Y/630),.64,1)
+    scale.Scale=math.clamp(math.min(size.X/425,size.Y/630),.76,1)
 end
 local function cameraChanged()
     if viewportConn then viewportConn:Disconnect(); viewportConn=nil end
@@ -1460,6 +1486,8 @@ local function cleanup()
     if disposed then return end
     disposed=true
     if viewportConn then viewportConn:Disconnect() end
+    activeDrag=nil
+    scroll.ScrollingEnabled=true
     for _,connection in ipairs(connections) do connection:Disconnect() end
     table.clear(connections)
     graphics:Destroy()
@@ -1469,7 +1497,7 @@ end
 shutdown.OnInvoke=cleanup
 render()
 -- The UVS_Shutdown BindableFunction handles re-execution cleanup.
-print("[UVS v6] Loaded | preset:",graphics:GetState().preset,"mode:",graphics:GetState().mode,"finish:",graphics:GetState().finish)
-print("[UVS v6] F3 / VISUALS. All finishes preserve texture maps; real SSR is unavailable.")
+print("[UVS v6.1] Loaded | preset:",graphics:GetState().preset,"mode:",graphics:GetState().mode,"finish:",graphics:GetState().finish)
+print("[UVS v6.1] F3 / VISUALS. All finishes preserve texture maps; real SSR is unavailable.")
 
 end
