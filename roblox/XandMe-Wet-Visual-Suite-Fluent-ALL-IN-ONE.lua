@@ -1,5 +1,5 @@
 --!nocheck
--- XandMe Wet Visual Suite v1.1 | Fluent-inspired local graphics
+-- XandMe Wet Visual Suite v1.2 | Cinematic Fog & Lighting Edition
 -- Self-contained client Luau. Native Roblox effects, not SSR or neural upscaling.
 -- Install as a LocalScript in StarterPlayerScripts in owned games, or run client-side.
 -- Cleanup from old sessions is not possible if old scripts never exposed shutdown.
@@ -30,6 +30,8 @@ local lightingOriginal={}
 local terrainOriginal={}
 local oldAtmosphere=nil
 local atmosphereOriginal=nil
+local previousSunRays=nil
+local sunRaysOriginal=nil
 local wetRoot=Instance.new("Folder")
 wetRoot.Name="XWM_WetLayers_"..tostring(LocalPlayer.UserId)
 wetRoot.Parent=Workspace
@@ -42,11 +44,13 @@ local S={
     applyToNamedObjects=true,overlayReflectance=.08,
     overlayTransparency=.83,overlayDarkness=.12,overlayExpand=.045,
     maxLayers=800,
-    lightingEnabled=true,brightness=2.25,envSpecular=1,envDiffuse=1,
-    exposure=.08,shadowSoftness=.22,
-    bloomIntensity=.18,bloomSize=30,bloomThreshold=1.02,
-    contrast=.16,saturation=.12,ccBrightness=.015,
-    atmosphereDensity=.27,atmosphereHaze=1.1,atmosphereGlare=.08,
+    lightingEnabled=true,brightness=1.95,envSpecular=1,envDiffuse=.87,
+    exposure=-.04,shadowSoftness=.22,shadowLift=.57,highlightProtection=.60,
+    bloomIntensity=.15,bloomSize=27,bloomThreshold=1.13,
+    contrast=.14,saturation=.12,ccBrightness=0,
+    fogEnabled=true,atmosphereDensity=.32,atmosphereHaze=1.50,
+    atmosphereGlare=.13,atmosphereOffset=.04,fogDistance=.52,fogTint=.45,
+    sunRaysEnabled=true,sunRaysIntensity=.075,sunRaysSpread=.78,
     terrainWaterReflectance=.22,terrainWaterTransparency=.25,
     terrainWaterWaveSize=.16,terrainWaterWaveSpeed=14,
     quality="Ultra",mode="Auto",menuOpen=false,selectedTab="looks",
@@ -59,24 +63,28 @@ local QUALITY_ORDER={"Balanced","Ultra","High Ultra","Max","Off"}
 local QUALITY_PRESETS={
     Balanced={charReflectance=.25,charAccessoryBoost=.05,
         overlayReflectance=.04,overlayTransparency=.90,overlayDarkness=.07,
-        brightness=1.95,exposure=0,shadowSoftness=.32,bloomIntensity=.10,
-        bloomSize=20,contrast=.09,saturation=.08,
-        atmosphereDensity=.22,atmosphereHaze=.65},
+        brightness=1.75,exposure=-.10,shadowSoftness=.32,bloomIntensity=.10,
+        bloomSize=20,contrast=.09,saturation=.08,shadowLift=.48,highlightProtection=.65,
+        atmosphereDensity=.24,atmosphereHaze=.85,
+        atmosphereGlare=.06,sunRaysIntensity=.04},
     Ultra={charReflectance=.45,charAccessoryBoost=.12,
         overlayReflectance=.08,overlayTransparency=.83,overlayDarkness=.12,
-        brightness=2.25,exposure=.08,shadowSoftness=.22,bloomIntensity=.18,
-        bloomSize=30,contrast=.16,saturation=.12,
-        atmosphereDensity=.27,atmosphereHaze=1.1},
+        brightness=1.95,exposure=-.04,shadowSoftness=.22,bloomIntensity=.15,
+        bloomSize=27,contrast=.14,saturation=.12,shadowLift=.57,highlightProtection=.60,
+        atmosphereDensity=.32,atmosphereHaze=1.5,
+        atmosphereGlare=.13,sunRaysIntensity=.075},
     ["High Ultra"]={charReflectance=.60,charAccessoryBoost=.17,
         overlayReflectance=.11,overlayTransparency=.83,overlayDarkness=.13,
-        brightness=2.35,exposure=.10,shadowSoftness=.17,bloomIntensity=.21,
-        bloomSize=32,contrast=.18,saturation=.15,
-        atmosphereDensity=.27,atmosphereHaze=1.13},
+        brightness=2.03,exposure=-.02,shadowSoftness=.17,bloomIntensity=.18,
+        bloomSize=30,contrast=.16,saturation=.14,shadowLift=.61,highlightProtection=.60,
+        atmosphereDensity=.35,atmosphereHaze=1.75,
+        atmosphereGlare=.17,sunRaysIntensity=.10},
     Max={charReflectance=.78,charAccessoryBoost=.23,
         overlayReflectance=.15,overlayTransparency=.81,overlayDarkness=.14,
-        brightness=2.45,exposure=.12,shadowSoftness=.12,bloomIntensity=.24,
-        bloomSize=34,contrast=.19,saturation=.16,
-        atmosphereDensity=.28,atmosphereHaze=1.18},
+        brightness=2.10,exposure=0,shadowSoftness=.12,bloomIntensity=.21,
+        bloomSize=32,contrast=.19,saturation=.16,shadowLift=.65,highlightProtection=.58,
+        atmosphereDensity=.38,atmosphereHaze=1.95,
+        atmosphereGlare=.21,sunRaysIntensity=.12},
     Off={off=true},
 }
 local MODE_ORDER={"Auto","Day","Golden Hour","Sunset","Dusk",
@@ -105,7 +113,7 @@ local MODE_PROFILES={
         exposure=.30,bloom=1.55,contrast=.06,saturation=.09},
     Cinematic={clock=nil,ambient=Color3.fromRGB(91,94,108),
         outdoor=Color3.fromRGB(137,139,151),tint=Color3.fromRGB(255,244,232),
-        exposure=.06,bloom=1.16,contrast=.05,saturation=.03},
+        exposure=-.01,bloom=1.08,contrast=.04,saturation=.03},
     Realistic={clock=nil,ambient=Color3.fromRGB(88,91,100),
         outdoor=Color3.fromRGB(130,134,144),tint=Color3.fromRGB(255,255,255),
         exposure=0,bloom=.80,contrast=-.02,saturation=-.015},
@@ -118,8 +126,10 @@ local SAVE_FIELDS={
     "applyToNamedObjects","overlayReflectance","overlayTransparency",
     "overlayDarkness","overlayExpand","maxLayers","lightingEnabled",
     "brightness","envSpecular","envDiffuse","exposure","shadowSoftness",
-    "bloomIntensity","bloomSize","bloomThreshold","contrast","saturation",
-    "ccBrightness","atmosphereDensity","atmosphereHaze","atmosphereGlare",
+    "shadowLift","highlightProtection","bloomIntensity","bloomSize","bloomThreshold",
+    "contrast","saturation","ccBrightness","fogEnabled",
+    "atmosphereDensity","atmosphereHaze","atmosphereGlare","atmosphereOffset",
+    "fogDistance","fogTint","sunRaysEnabled","sunRaysIntensity","sunRaysSpread",
     "terrainWaterReflectance","terrainWaterTransparency","terrainWaterWaveSize",
     "terrainWaterWaveSpeed","quality","mode"
 }
@@ -129,10 +139,13 @@ local FIELD_RANGES={
     overlayDarkness={0,.35},overlayExpand={.01,.12},
     maxLayers={100,1200},brightness={.5,4},envSpecular={0,1},
     envDiffuse={0,1},exposure={-.5,.5},shadowSoftness={0,1},
+    shadowLift={0,1},highlightProtection={0,1},
     bloomIntensity={0,.4},bloomSize={0,56},bloomThreshold={.5,2},
     contrast={0,.4},saturation={0,.4},ccBrightness={-.1,.1},
-    atmosphereDensity={0,.6},atmosphereHaze={0,3},
-    atmosphereGlare={0,1},terrainWaterReflectance={0,1},
+    atmosphereDensity={0,.6},atmosphereHaze={0,3.5},
+    atmosphereGlare={0,1},atmosphereOffset={-.35,.65},
+    fogDistance={0,1},fogTint={0,1},sunRaysIntensity={0,.25},
+    sunRaysSpread={0,1},terrainWaterReflectance={0,1},
     terrainWaterTransparency={0,1},terrainWaterWaveSize={0,1},
     terrainWaterWaveSpeed={0,40}
 }
@@ -281,51 +294,103 @@ local function getEffect(className,name)
     return obj
 end
 
+local FOG_MODE_MULTIPLIER={
+    Auto=1,Day=.94,["Golden Hour"]=1.10,Sunset=1.20,
+    Dusk=1.24,Night=1.24,["Neon Night"]=1.18,
+    Cinematic=1.10,Realistic=.90,
+}
 local function applyLighting()
     if not Suite.Alive or not S.enabled or not S.lightingEnabled then return end
     local profile=MODE_PROFILES[S.mode] or MODE_PROFILES.Auto
     if profile.clock~=nil then safeSet(Lighting,"ClockTime",profile.clock) end
-    safeSet(Lighting,"Brightness",S.brightness)
+    -- Gentle tone mapping of existing game lighting:
+    -- highlight protection reduces overexposure; shadow lift raises ambient
+    -- only, leaving unlit places darker than sunlit ones.
+    local protection=S.highlightProtection
+    local brightness=clamp(S.brightness-.36*protection,.5,4)
+    local exposure=clamp(S.exposure+profile.exposure-.20*protection,-.55,.45)
+    safeSet(Lighting,"Brightness",brightness)
     safeSet(Lighting,"EnvironmentDiffuseScale",S.envDiffuse)
     safeSet(Lighting,"EnvironmentSpecularScale",S.envSpecular)
-    safeSet(Lighting,"ExposureCompensation",
-        clamp(S.exposure+profile.exposure,-.5,.5))
+    safeSet(Lighting,"ExposureCompensation",exposure)
     safeSet(Lighting,"GlobalShadows",true)
     safeSet(Lighting,"ShadowSoftness",S.shadowSoftness)
-    safeSet(Lighting,"Ambient",profile.ambient)
-    safeSet(Lighting,"OutdoorAmbient",profile.outdoor)
+    local baseAmbient=lightingOriginal.Ambient or Color3.fromRGB(75,75,75)
+    local baseOutdoor=lightingOriginal.OutdoorAmbient or Color3.fromRGB(110,110,110)
+    local lift=clamp(.12+.72*S.shadowLift,0,.84)
+    safeSet(Lighting,"Ambient",baseAmbient:Lerp(profile.ambient,lift))
+    safeSet(Lighting,"OutdoorAmbient",baseOutdoor:Lerp(profile.outdoor,lift*.66))
     safeSet(Lighting,"ColorShift_Top",profile.tint)
     safeSet(Lighting,"ColorShift_Bottom",Color3.fromRGB(96,104,118))
 
     local bloom=getEffect("BloomEffect","XWM_Bloom")
     bloom.Enabled=true
-    bloom.Intensity=clamp(S.bloomIntensity*profile.bloom,0,.4)
+    bloom.Intensity=clamp(S.bloomIntensity*profile.bloom*(1-protection*.24),0,.35)
     bloom.Size=S.bloomSize
-    bloom.Threshold=S.bloomThreshold
+    bloom.Threshold=clamp(S.bloomThreshold+.14*protection,.6,2)
     local color=getEffect("ColorCorrectionEffect","XWM_Color")
     color.Enabled=true
-    color.Brightness=S.ccBrightness
+    color.Brightness=S.ccBrightness-.008*protection
     color.Contrast=clamp(S.contrast+profile.contrast,0,.4)
     color.Saturation=clamp(S.saturation+profile.saturation,0,.4)
     color.TintColor=profile.tint
 
     local at=Lighting:FindFirstChildOfClass("Atmosphere")
-    if not at then
+    if not at and S.fogEnabled then
         at=Instance.new("Atmosphere")
         at.Name="XWM_Atmosphere"
         at.Parent=Lighting
         ownedEffects[#ownedEffects+1]=at
-    elseif not oldAtmosphere then
+    elseif at and not oldAtmosphere and at.Name~="XWM_Atmosphere" then
         oldAtmosphere=at
         atmosphereOriginal={}
         saveProps(at,{"Density","Offset","Color","Decay","Glare","Haze"},atmosphereOriginal)
     end
-    at.Density=S.atmosphereDensity
-    at.Offset=0
-    at.Color=Color3.fromRGB(195,210,228)
-    at.Decay=Color3.fromRGB(120,126,138)
-    at.Glare=S.atmosphereGlare
-    at.Haze=S.atmosphereHaze
+    if at then
+        if S.fogEnabled then
+            local multiplier=FOG_MODE_MULTIPLIER[S.mode] or 1
+            -- The distance slider is approximate for Atmosphere: more to the
+            -- right means visibility travels farther, not a literal FogEnd.
+            local distanceFactor=1.42-.78*S.fogDistance
+            at.Density=clamp(S.atmosphereDensity*multiplier*distanceFactor,0,.7)
+            at.Haze=clamp(S.atmosphereHaze*multiplier*(1.25-.40*S.fogDistance),0,5)
+            at.Offset=S.atmosphereOffset
+            at.Glare=clamp(S.atmosphereGlare,0,1)
+            -- Tint stays near the original map palette so distant objects
+            -- remain readable instead of being washed into bright white.
+            local baseColor=if atmosphereOriginal and atmosphereOriginal.Color
+                then atmosphereOriginal.Color else Color3.fromRGB(180,199,220)
+            local baseDecay=if atmosphereOriginal and atmosphereOriginal.Decay
+                then atmosphereOriginal.Decay else Color3.fromRGB(111,124,143)
+            local fogColor=baseColor:Lerp(Color3.fromRGB(171,193,211),.33)
+            at.Color=fogColor:Lerp(profile.tint,.16*S.fogTint)
+            at.Decay=baseDecay:Lerp(Color3.fromRGB(103,117,139),.36*S.fogTint)
+        elseif oldAtmosphere and at==oldAtmosphere and atmosphereOriginal then
+            restoreProps(at,atmosphereOriginal)
+        else
+            at.Density=0
+            at.Haze=0
+            at.Glare=0
+        end
+    end
+    -- Sun rays are directional light scattering around the sun;
+    -- they are not true per-lamp volumetric beams.
+    local rays=Lighting:FindFirstChildOfClass("SunRaysEffect")
+    if not rays then
+        rays=Instance.new("SunRaysEffect")
+        rays.Name="XWM_SunRays"
+        rays.Parent=Lighting
+        ownedEffects[#ownedEffects+1]=rays
+    elseif rays.Name~="XWM_SunRays" and not previousSunRays then
+        previousSunRays=rays
+        sunRaysOriginal={}
+        saveProps(rays,{"Enabled","Intensity","Spread"},sunRaysOriginal)
+    end
+    rays.Enabled=S.sunRaysEnabled and S.fogEnabled
+    if rays.Enabled then
+        rays.Intensity=clamp(S.sunRaysIntensity*(1-.48*protection),0,.25)
+        rays.Spread=clamp(S.sunRaysSpread,0,1)
+    end
 
     safeSet(Terrain,"WaterReflectance",S.terrainWaterReflectance)
     safeSet(Terrain,"WaterTransparency",S.terrainWaterTransparency)
@@ -337,6 +402,9 @@ local function restoreLighting()
     restoreProps(Terrain,terrainOriginal)
     if oldAtmosphere and oldAtmosphere.Parent and atmosphereOriginal then
         restoreProps(oldAtmosphere,atmosphereOriginal)
+    end
+    if previousSunRays and previousSunRays.Parent and sunRaysOriginal then
+        restoreProps(previousSunRays,sunRaysOriginal)
     end
     for _,fx in ipairs(ownedEffects)do
         if fx and fx.Parent then fx:Destroy()end
@@ -635,6 +703,7 @@ local names={
     {"characters","Characters"},
     {"varnish","Wet Overlay"},
     {"lighting","Lighting"},
+    {"fog","Fog & Rays"},
     {"presets","My Presets"},
     {"system","System"}
 }
@@ -709,7 +778,7 @@ local function syncControls()
     statusLabel.Text=string.format("%s  |  %s · %s",status,S.quality,S.mode)
 end
 local function changed(kind)
-    if kind=="char" or kind=="wet" or kind=="wetValues" or kind=="lighting" then
+    if kind=="char" or kind=="wet" or kind=="wetValues" or kind=="lighting" or kind=="fog" then
         S.quality="Custom"
     end
     if kind=="char" then
@@ -720,7 +789,7 @@ local function changed(kind)
         else refreshLayers();task.spawn(scanWet)end
     elseif kind=="wetValues" then
         refreshLayers()
-    elseif kind=="lighting" then
+    elseif kind=="lighting" or kind=="fog" then
         if S.enabled and S.lightingEnabled then applyLighting()
         else restoreLighting() end
     end
@@ -922,6 +991,8 @@ toggle(c,"Aktifkan pencahayaan","lightingEnabled","lighting")
 slider(c,"Brightness","brightness",.5,4,"lighting")
 slider(c,"Exposure","exposure",-.5,.5,"lighting")
 slider(c,"Shadow Softness","shadowSoftness",0,1,"lighting")
+slider(c,"Shadow Lift","shadowLift",0,1,"lighting")
+slider(c,"Highlight Protection","highlightProtection",0,1,"lighting")
 slider(c,"Environment Specular","envSpecular",0,1,"lighting")
 slider(c,"Environment Diffuse","envDiffuse",0,1,"lighting")
 slider(c,"Bloom","bloomIntensity",0,.4,"lighting")
@@ -932,6 +1003,44 @@ slider(c,"Terrain Water Clarity","terrainWaterTransparency",0,1,"lighting")
 rowButton(c,"Terapkan pencahayaan",function()
     applyLighting();status="Pencahayaan diperbarui";syncControls()
 end)
+
+local fogSection=section(pages.fog,"CINEMATIC ATMOSPHERE")
+toggle(fogSection,"Aktifkan kabut atmosfer","fogEnabled","fog")
+slider(fogSection,"Fog Density","atmosphereDensity",0,.6,"fog")
+slider(fogSection,"Fog Haze","atmosphereHaze",0,3.5,"fog")
+slider(fogSection,"Fog Glare","atmosphereGlare",0,1,"fog")
+slider(fogSection,"Fog Offset","atmosphereOffset",-.35,.65,"fog")
+slider(fogSection,"Jarak kabut (perkiraan)","fogDistance",0,1,"fog")
+slider(fogSection,"Fog Color Tint","fogTint",0,1,"fog")
+local raySection=section(pages.fog,"SUNLIGHT SCATTERING")
+toggle(raySection,"Sun Rays","sunRaysEnabled","fog")
+slider(raySection,"Sun Rays Intensity","sunRaysIntensity",0,.25,"fog")
+slider(raySection,"Sun Rays Spread","sunRaysSpread",0,1,"fog")
+rowButton(raySection,"Cinematic Fog (seimbang)",function()
+    S.fogEnabled=true
+    S.atmosphereDensity=.32;S.atmosphereHaze=1.50
+    S.atmosphereGlare=.13;S.atmosphereOffset=.04
+    S.fogDistance=.52;S.fogTint=.45
+    S.sunRaysEnabled=true;S.sunRaysIntensity=.075
+    S.sunRaysSpread=.78
+    S.quality="Custom"
+    applyLighting();status="Cinematic Fog aktif";syncControls()
+end)
+rowButton(raySection,"Misty / Fog Tebal",function()
+    S.fogEnabled=true
+    S.atmosphereDensity=.46;S.atmosphereHaze=2.25
+    S.atmosphereGlare=.12;S.atmosphereOffset=-.03
+    S.fogDistance=.25;S.fogTint=.50
+    S.sunRaysEnabled=true;S.sunRaysIntensity=.055
+    S.quality="Custom"
+    applyLighting();status="Misty Fog aktif";syncControls()
+end,Color3.fromRGB(60,88,124))
+local note=make("TextLabel",pages.fog,{
+    Size=UDim2.new(1,-16,0,52),BackgroundTransparency=1,
+    TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top,
+    Font=Enum.Font.Gotham,TextSize=11,TextColor3=sub,
+    Text="Fog Distance pada Atmosphere adalah perkiraan visual, bukan FogEnd dalam studs. Sun Rays mengikuti arah matahari."
+})
 
 local presetSection=section(pages.presets,"SAVE / LOAD PERSONAL PRESET")
 local presetNameBox=make("TextBox",presetSection,{
@@ -1198,4 +1307,4 @@ showTab(S.selectedTab)
 syncControls()
 fullApply()
 syncControls()
-print("[XandMe Wet Visual Suite v1.1] Modes and saved presets ready. Press F3 or V.")
+print("[XandMe Wet Visual Suite v1.2] Cinematic Fog + Lighting restored. Press F3 or V.")
