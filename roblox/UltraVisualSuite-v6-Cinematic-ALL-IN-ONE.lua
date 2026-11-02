@@ -1,5 +1,5 @@
 --!strict
--- ULTRA VISUAL SUITE v6.0.0 | Standalone client-side visual controller
+-- ULTRA VISUAL SUITE v6.1.0 | Standalone client-side visual controller
 -- Standalone Luau build: no ModuleScript or RemoteEvent dependency.
 -- Intended for authorized client-side use only. No real DLSS/AI upscaling.
 -- No account data, HTTP requests, external services, or server persistence.
@@ -240,6 +240,13 @@ function Controller.new(settings: any): any
     self.parts = setmetatable({}, {__mode="k"})
     self.lamps = setmetatable({}, {__mode="k"})
     self.trackedCount = 0
+    self.reflectActive = 0
+    self.reflectFailures = 0
+    self.refreshGeneration = 0
+    self.glossSliderKey = ""
+    self.scheduleToken = 0
+    self.scheduleDeadline = 0
+    self.liveSliderUntil = 0
     self.replacedCount = 0
     self.materialFailures = 0
     self.scanBusy=false;self.scanCount=0;self.scanQueued=0;self.scanBatchCount=0
@@ -278,7 +285,7 @@ function Controller.new(settings: any): any
     end
     self.folder = Instance.new("Folder")
     self.folder.Name = "UVS_Runtime"
-    self.folder:SetAttribute("Build", "6.0.0")
+    self.folder:SetAttribute("Build", "6.1.0")
     self.folder.Parent = Lighting
 
     table.insert(self.connections, Lighting.Changed:Connect(function(property)
@@ -351,6 +358,7 @@ function Controller:Metrics(): any
     end
     return {fps=self.fps, preset=self.state.preset, effective=effective(self),
         finish=self.state.finish, replaced=self.replacedCount, failures=self.materialFailures,
+        reflectActive=self.reflectActive, reflectFailures=self.reflectFailures,
         scanBusy=self.scanBusy or self.pumping,scanCount=self.scanCount,scanQueued=self.scanQueued,
         skippedTextures=self.skippedTextures,effects=n, parts=self.trackedCount, comparing=self.comparing, photo=self.photo, testing=self.testing,
         clock=Lighting.ClockTime, exposure=Lighting.ExposureCompensation,
@@ -361,16 +369,26 @@ function Controller:Notify()
     if self.alive then self.changed:Fire(self:GetState(), self:Metrics()) end
 end
 function Controller:Update(group: string, key: any, value: any?)
-    if group=="preset" then self.state.preset=key; self.downgrade=0
+    if group=="sliders" then
+        if self.state.sliders[key]==nil or type(value)~="number"
+            or value~=value or value==math.huge or value==-math.huge then return end
+        local nextValue=math.clamp(value,0,1)
+        if math.abs(self.state.sliders[key]-nextValue)<.0005 then return end
+        self.state.sliders[key]=nextValue
+        self.liveSliderUntil=os.clock()+.20
+        self:Schedule(.035)
+        self:Notify()
+        return
+    elseif group=="preset" then self.state.preset=key; self.downgrade=0
     elseif group=="mode" then self.state.mode=key
     elseif group=="weather" then self.state.weather=key
     elseif group=="finish" then self.state.finish=key
     elseif group=="adaptive" then self.state.adaptive=key; self.downgrade=0
     elseif group=="features" and self.state.features[key]~=nil then self.state.features[key]=value
-    elseif group=="sliders" and self.state.sliders[key]~=nil then self.state.sliders[key]=value
     else return end
     self.state=Config.Sanitize(self.state)
-    self:Schedule(); self:Notify()
+    self:Schedule(.10)
+    self:Notify()
 end
 function Controller:Load(values: any)
     self.state=Config.Sanitize(values)
@@ -408,12 +426,20 @@ function Controller:VisualTest()
         self:Notify()
     end)
 end
-function Controller:Schedule()
-    if self.scheduled or not self.alive then return end
+function Controller:Schedule(delaySeconds: number?)
+    if not self.alive then return end
+    local delayTime=delaySeconds or .12
+    local deadline=os.clock()+delayTime
+    if self.scheduled and self.scheduleDeadline<=deadline then return end
+    self.scheduleDeadline=deadline
+    self.scheduleToken+=1
+    local token=self.scheduleToken
     self.scheduled=true
-    task.delay(.25, function()
+    task.delay(delayTime,function()
+        if not self.alive or token~=self.scheduleToken then return end
         self.scheduled=false
-        if self.alive then self:Apply() end
+        self.scheduleDeadline=0
+        self:Apply()
     end)
 end
 function Controller:StopTweens()
@@ -421,6 +447,7 @@ function Controller:StopTweens()
     table.clear(self.tweens)
 end
 function Controller:Tween(inst: Instance, props: {[string]:any}, duration: number)
+    if os.clock()<self.liveSliderUntil then duration=math.min(duration,.10) end
     for k, v in pairs(props) do
         if v == nil or get(inst,k) == v then continue end
         local ok, tween = pcall(function()
@@ -479,6 +506,7 @@ function Controller:RestorePart(part: BasePart)
         end
         self.parts[part]=nil
         self.trackedCount=math.max(0,self.trackedCount-1)
+        if old.activeReflect then self.reflectActive=math.max(0,self.reflectActive-1) end
     end
 end
 function Controller:RestoreParts()
@@ -486,7 +514,9 @@ function Controller:RestoreParts()
     self.pending={};self.pendingSet=setmetatable({}, {__mode="k"})
     self.scanBusy=false
     for part in pairs(self.parts) do self:RestorePart(part) end
-    self.surfaceKey="";self.replacedCount=0
+    self.surfaceKey="";self.glossSliderKey="";self.replacedCount=0
+    self.reflectActive=0
+    self.refreshGeneration+=1
 end
 function Controller:RestoreLamps()
     for light, original in pairs(self.lamps) do
@@ -615,7 +645,7 @@ function Controller:UpdatePart(part: BasePart)
         target=math.max(target,.14*scale*amount)
     end
     if wet then target=math.max(target,.19*scale) end
-    local cap=if style=="Chrome Highlights" then .56 else .33
+    local cap=if style=="Chrome Highlights" then .56 else .34
     if character then
         cap=if textured then .125 else .19
     elseif textured then
@@ -624,12 +654,18 @@ function Controller:UpdatePart(part: BasePart)
     target=math.clamp(target,0,cap)
     local old=self.parts[part]
     if not old then
-        old={reflectance=part.Reflectance,variant=part.MaterialVariant,variantApplied=false}
+        old={reflectance=part.Reflectance,variant=part.MaterialVariant,variantApplied=false,activeReflect=false}
         self.parts[part]=old
         self.trackedCount+=1
     end
     -- Never write Material, Color, Transparency, TextureID, SurfaceAppearance or physics.
-    put(part,"Reflectance",math.max(old.reflectance,target))
+    local desired=math.max(old.reflectance,target)
+    local enhanced=(desired-old.reflectance)>.004
+    if enhanced~=old.activeReflect then
+        self.reflectActive+=if enhanced then 1 else -1
+        old.activeReflect=enhanced
+    end
+    if not put(part,"Reflectance",desired) then self.reflectFailures+=1 end
     -- Opt-in only: Studio-authored material variants on explicitly tagged parts.
     if f.PBRVariants and CollectionService:HasTag(part,"UVS_PBR")
         and not textured and old.variant=="" then
@@ -645,15 +681,36 @@ function Controller:UpdatePart(part: BasePart)
         old.variantApplied=false
     end
 end
+function Controller:RefreshTrackedParts()
+    self.refreshGeneration+=1
+    local token=self.refreshGeneration
+    task.spawn(function()
+        local count=0
+        for part in pairs(self.parts) do
+            if not self.alive or token~=self.refreshGeneration or not self.active then return end
+            if part.Parent then self:UpdatePart(part) end
+            count+=1
+            if count%55==0 then task.wait(.007+self.state.sliders.BatchPace*.013) end
+        end
+        self:Notify()
+    end)
+end
 function Controller:SurfaceRefresh()
     local f=self.state.features
     local key=table.concat({effective(self),self.state.finish,self.state.weather,
         tostring(f.Glossy),tostring(f.WetGround),tostring(f.CharacterAccents),
         tostring(f.Characters),tostring(f.AllObjects),tostring(f.Neon),
-        tostring(f.Transparent),tostring(f.PBRVariants),
-        tostring(self.state.sliders.SurfaceStrength),
-        tostring(self.state.sliders.Glossy),tostring(self.state.sliders.Reflectance)},"|")
-    if key~=self.surfaceKey then self.surfaceKey=key;self:ScanParts() end
+        tostring(f.Transparent),tostring(f.PBRVariants)},"|")
+    local sliders=table.concat({tostring(self.state.sliders.Glossy),
+        tostring(self.state.sliders.Reflectance),tostring(self.state.sliders.SurfaceStrength)},"|")
+    if key~=self.surfaceKey then
+        self.surfaceKey=key
+        self.glossSliderKey=sliders
+        self:ScanParts()
+    elseif sliders~=self.glossSliderKey then
+        self.glossSliderKey=sliders
+        self:RefreshTrackedParts()
+    end
 end
 function Controller:UpdateLamps()
     if not self.active or not self.state.features.Lamps then self:RestoreLamps(); return end
@@ -716,8 +773,8 @@ function Controller:Apply()
             values.OutdoorAmbient=values.OutdoorAmbient:Lerp(profile.outdoor,.18)
             put(Lighting,"ClockTime",profile.hour)
         end
-        values.EnvironmentSpecularScale=math.clamp(
-            math.max(map.EnvironmentSpecularScale or 0,preset.specular*(.45+s.Specular*.5)),0,1)
+        -- Unlike max(map, computed), this slider really spans 0..1.
+        values.EnvironmentSpecularScale=math.clamp(preset.specular*s.Specular,0,1)
         values.EnvironmentDiffuseScale=math.clamp(
             math.max(map.EnvironmentDiffuseScale or 0,preset.diffuse*(.45+s.Ambient*.55)),0,1)
         values.ShadowSoftness=math.clamp(s.ShadowSoftness,0,1)
@@ -731,8 +788,7 @@ function Controller:Apply()
     else
         put(Lighting,"GlobalShadows",originals.GlobalShadows)
         if f.Glossy then
-            values.EnvironmentSpecularScale=math.max(map.EnvironmentSpecularScale or 0,
-                preset.specular*s.Specular*.75)
+            values.EnvironmentSpecularScale=math.clamp(preset.specular*s.Specular,0,1)
         end
         if fixed then put(Lighting,"ClockTime",self.sourceClock) end
     end
