@@ -997,7 +997,7 @@ launcher.BackgroundColor3=Color3.fromRGB(29,31,53)
 launcher.BackgroundTransparency=.16
 border(launcher)
 local launcherGradient=Instance.new("UIGradient")
-launcherGradient.Color=ColorSequence.new(Color3.fromRGB(45,49,80),Color3.fromRGB(51,34,79))
+launcherGradient.Color=ColorSequence.new(Color3.fromRGB(255,255,255),Color3.fromRGB(226,221,250))
 launcherGradient.Rotation=35
 launcherGradient.Parent=launcher
 
