@@ -1,13 +1,39 @@
 --!strict
--- ULTRA VISUAL SUITE v6.3.0 | Standalone client-side visual controller
+-- ULTRA VISUAL SUITE v6.4.0 | Standalone client-side visual controller
 -- Standalone Luau build: no ModuleScript or RemoteEvent dependency.
 -- Intended for authorized client-side use only. No real DLSS/AI upscaling.
 -- No account data, HTTP requests, external services, or server persistence.
 -- Client lighting and material changes are best-effort and may be blocked by the engine.
 -- UI: F3 / glass launcher. Reflectance is skybox-based, NOT SSR.
+-- v6.4 automatically clears the obsolete UVS Fake Reflection add-on
+-- that created translucent duplicate buildings above streets.
 -- Texture safe by design: original materials, SurfaceAppearance, textures, faces,
 -- clothing, decals, mesh IDs and physics are not replaced or overwritten.
 -- Files 01..14 are sequential code fragments; use the combined file to execute.
+
+-- Cleanup the old experimental planar-clone add-on only.
+-- It mirrored entire buildings into free space, not into an actual surface.
+pcall(function()
+    local old = _G.UVS_FakeReflection
+    if type(old)=="table" and type(old.Destroy)=="function" then old:Destroy() end
+    _G.UVS_FakeReflection=nil
+end)
+pcall(function()
+    local world=game:GetService("Workspace")
+    local cloneFolder=world:FindFirstChild("UVS_FakeReflections")
+    if cloneFolder then cloneFolder:Destroy() end
+    local plr=game:GetService("Players").LocalPlayer
+    if plr then
+        local playerGui=plr:FindFirstChildOfClass("PlayerGui")
+        if playerGui then
+            local oldGui=playerGui:FindFirstChild("UVS_FakeReflection_GUI")
+            if oldGui then oldGui:Destroy() end
+        end
+    end
+    local coreGui=game:GetService("CoreGui")
+    local oldGui=coreGui:FindFirstChild("UVS_FakeReflection_GUI")
+    if oldGui then oldGui:Destroy() end
+end)
 
 local Config = (function()
 --!strict
@@ -23,8 +49,10 @@ C.Presets = {
     Cinematic = {specular=1,diffuse=.85,shadow=.24,bloom=.22,bloomSize=25,saturation=.11,contrast=.115,density=.1,rays=.04,dof=0,gloss=.97},
     Max = {specular=1,diffuse=.95,shadow=.12,bloom=.31,bloomSize=29,saturation=.15,contrast=.15,density=.11,rays=.07,dof=0,gloss=1},
 }
-C.FinishOrder = {"Original", "Polished", "Wet Look", "Chrome Highlights"}
+C.FinishOrder = {"Original", "Polished", "Wet Look", "Chrome Highlights", "PShade-style Gloss"}
 -- These modes modify reflectance only. None swaps Metal, Glass or SmoothPlastic.
+-- The PShade-style mode is an independent implementation of native reflectance,
+-- not source code copied from PShade and not screen-space reflections.
 
 C.TimeOrder = {"Auto", "Day", "Golden Hour", "Sunset", "Dusk", "Night", "Neon Night", "Cinematic", "Realistic"}
 C.WeatherOrder = {"Clear", "Overcast", "Foggy", "Rainy"}
@@ -61,11 +89,11 @@ C.SliderOrder = {"Glossy","Reflectance","SurfaceStrength","Specular","ShadowStre
     "WaterReflection","WaterClarity","WaterDepth","WaterWaves","Density","Haze","FogDistance","SunRays","BatchPace"}
 
 C.Defaults = {
-    preset="Cinematic",mode="Auto",weather="Clear",finish="Chrome Highlights",adaptive=false,
+    preset="Cinematic",mode="Auto",weather="Clear",finish="PShade-style Gloss",adaptive=false,
     features={Lighting=true,MapAdaptive=true,Glossy=true,AllObjects=true,PBRVariants=false,
         Bloom=true,Colors=true,Atmosphere=true,Sharpness=true,DOF=false,Sky=false,
         Water=true,WetGround=false,Lamps=false,CharacterAccents=true,
-        Characters=false,Transparent=false,Neon=false,SoftSunRays=true},
+        Characters=true,Transparent=false,Neon=false,SoftSunRays=true},
     sliders={Glossy=.94,Reflectance=.75,SurfaceStrength=.80,Specular=.94,
         ShadowStrength=.55,ShadowSoftness=.22,ShadowLift=.55,Ambient=.45,
         Bloom=.64,GlowThreshold=.68,Saturation=.57,Contrast=.66,Clarity=.70,
@@ -293,7 +321,7 @@ function Controller.new(settings: any): any
     end
     self.folder = Instance.new("Folder")
     self.folder.Name = "UVS_Runtime"
-    self.folder:SetAttribute("Build", "6.3.0")
+    self.folder:SetAttribute("Build", "6.4.0")
     self.folder.Parent = Lighting
 
     table.insert(self.connections, Lighting.Changed:Connect(function(property)
@@ -689,6 +717,12 @@ function Controller:UpdatePart(part: BasePart)
     local amount=if style=="Polished" then .95 elseif style=="Wet Look" then 1.04 else 1.32
     -- Reflectance slider must have a real zero rather than retaining 45%.
     local target=base*scale*amount*(s.Reflectance*1.65)
+    if style=="PShade-style Gloss" then
+        -- PShade's main visual trick is skybox reflection on all eligible
+        -- BaseParts. Do this locally without cloning a single 3D object.
+        -- Use the existing UVS sliders and preserve Material/TextureID.
+        target=math.clamp(s.Glossy*s.Reflectance*(.23+.77*s.SurfaceStrength),0,1)
+    end
     if style=="Chrome Highlights" and s.Glossy>0 and s.Reflectance>0 then
         local minimum=if material==Enum.Material.Metal or material==Enum.Material.DiamondPlate
             then .32 elseif material==Enum.Material.SmoothPlastic then .27
@@ -699,8 +733,17 @@ function Controller:UpdatePart(part: BasePart)
         target=math.max(target,.14*scale*amount*s.Reflectance)
     end
     if wet then target=math.max(target,.19*scale*s.Reflectance) end
-    local cap=if style=="Chrome Highlights" then .56 else .34
-    if character then
+    local cap=if style=="PShade-style Gloss" then 1
+        elseif style=="Chrome Highlights" then .56 else .34
+    if style=="PShade-style Gloss" then
+        -- Retain visual detail on mesh faces and clothing while allowing a
+        -- strong, clearly distinguishable skybox highlight on plain objects.
+        if character then
+            cap=if textured then .55 else .72
+        elseif textured then
+            cap=.62
+        end
+    elseif character then
         cap=if textured then .20 else .25
     elseif textured then
         cap=math.min(cap,.26)
@@ -1763,7 +1806,7 @@ end
 shutdown.OnInvoke=cleanup
 render()
 -- The UVS_Shutdown BindableFunction handles re-execution cleanup.
-print("[UVS v6.3] Loaded | preset:",graphics:GetState().preset,"mode:",graphics:GetState().mode,"finish:",graphics:GetState().finish)
-print("[UVS v6.3] F3 / VISUALS. All finishes preserve texture maps; real SSR is unavailable.")
+print("[UVS v6.4] Loaded | preset:",graphics:GetState().preset,"mode:",graphics:GetState().mode,"finish:",graphics:GetState().finish)
+print("[UVS v6.4] F3 / VISUALS. All finishes preserve texture maps; real SSR is unavailable.")
 
 end
