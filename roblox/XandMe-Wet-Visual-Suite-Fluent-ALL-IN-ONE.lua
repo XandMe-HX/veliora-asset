@@ -140,7 +140,16 @@ local FILE_PATH="XandMe_WetVisualSuite_Presets_v1.json"
 local savedSlots={}
 local selectedSlot=1
 local selectedName="Preset Saya"
-local diskSaveAvailable=type(writefile)=="function" and type(readfile)=="function"
+-- Xeno versions expose either global file functions or Xeno.readfile/writefile.
+-- Optional API: every filesystem operation is protected by pcall.
+local xenoApi=if type(Xeno)=="table" then Xeno else nil
+local fileRead=if type(readfile)=="function" then readfile
+    elseif xenoApi and type(xenoApi.readfile)=="function" then xenoApi.readfile
+    else nil
+local fileWrite=if type(writefile)=="function" then writefile
+    elseif xenoApi and type(xenoApi.writefile)=="function" then xenoApi.writefile
+    else nil
+local diskSaveAvailable=fileRead~=nil and fileWrite~=nil
 local function snapshot()
     local data={}
     for _,key in ipairs(SAVE_FIELDS)do data[key]=S[key]end
@@ -194,7 +203,7 @@ local function importSaved(container)
 end
 local dataRead=false
 if diskSaveAvailable then
-    local ok,content=pcall(readfile,FILE_PATH)
+    local ok,content=pcall(fileRead,FILE_PATH)
     if ok and type(content)=="string" then
         local good,decoded=pcall(function()return HttpService:JSONDecode(content)end)
         if good then importSaved(decoded);dataRead=true end
@@ -209,8 +218,8 @@ local function saveContainer()
     if diskSaveAvailable then
         local ok,encoded=pcall(function()return HttpService:JSONEncode(out)end)
         if ok then
-            local written=pcall(writefile,FILE_PATH,encoded)
-            if written then return true end
+            local written,response=pcall(fileWrite,FILE_PATH,encoded)
+            if written and response~=false then return true end
         end
     end
     return false
@@ -354,7 +363,15 @@ end
 local function applyCharacterPart(part,model)
     if not Suite.Alive or not S.enabled or not S.charEnabled then return end
     if part.Name=="HumanoidRootPart" then return end
-    if not S.shinyAccessories and accessoryAncestor(part,model) then return end
+    if not S.shinyAccessories and accessoryAncestor(part,model) then
+        local original=partOriginals[part]
+        if original then
+            safeSet(part,"Material",original.Material)
+            safeSet(part,"Reflectance",original.Reflectance)
+            partOriginals[part]=nil
+        end
+        return
+    end
     rememberPart(part)
     safeSet(part,"Material",S.charMaterial)
     -- Nonlinear slider: left stays subtle, right produces strong glossy.
@@ -707,6 +724,7 @@ local function changed(kind)
         if S.enabled and S.lightingEnabled then applyLighting()
         else restoreLighting() end
     end
+    syncControls()
 end
 local function rowButton(holder,label,callback,tint)
     local btn=make("TextButton",holder,{
@@ -752,7 +770,13 @@ local function toggle(holder,label,key,kind)
     track(btn.Activated:Connect(function()
         S[key]=not S[key]
         if key=="enabled" then
-            if S.enabled then fullApply()else restoreAll()end
+            if S.enabled then
+                S.quality="Custom"
+                fullApply()
+            else
+                S.quality="Off"
+                restoreAll()
+            end
         else changed(kind)end
         syncControls()
     end))
@@ -997,14 +1021,16 @@ rowButton(d,"Terapkan semuanya",function()
     fullApply();syncControls()
 end)
 rowButton(d,"Preset Glossy",function()
-    S.charReflectance=.34;S.overlayReflectance=.1
+    S.quality="Custom"
+    S.charReflectance=.52;S.overlayReflectance=.1
     S.overlayTransparency=.82;S.overlayDarkness=.1
     S.brightness=2.3;S.exposure=.10;S.bloomIntensity=.18
     S.contrast=.17;S.saturation=.13
     fullApply();refreshLayers();status="Preset Glossy aktif";syncControls()
 end,Color3.fromRGB(60,88,124))
 rowButton(d,"Preset Wet Rain",function()
-    S.charReflectance=.28;S.overlayReflectance=.13
+    S.quality="Custom"
+    S.charReflectance=.40;S.overlayReflectance=.13
     S.overlayTransparency=.80;S.overlayDarkness=.16
     S.brightness=2.1;S.exposure=.02;S.bloomIntensity=.12
     S.contrast=.14;S.saturation=.09
