@@ -1,4 +1,4 @@
-# Ultra Visual Suite v6.4 — Cinematic Edition (PShade-style Native Gloss)
+# Ultra Visual Suite v6.5 — Cinematic Edition (PShade-inspired Lighting & Texture-Safe Gloss)
 
 ## Files
 - `UltraVisualSuite-v6-Cinematic-ALL-IN-ONE.lua`: **complete standalone Luau source** (all settings, controller and GUI in one file). Intended for client-side execution in environments where scripts are authorized.
@@ -158,3 +158,30 @@ The provided reference loader `randomstring0/pshade-ultimate/src/cd.lua` loads e
 3. Inspect smooth plastic, metal, and the avatar at a fixed camera position. Dark unlit surfaces may have limited highlights; the environment's skybox drives most reflected appearance.
 4. Compare with Original and then Off to confirm all tracked native property changes restore. The old fake-addon clone objects are intentionally destroyed.
 5. For true texture-mapped wet materials in your **own** experience, author SurfaceAppearance maps in Roblox Studio; a client-only executor can't supply new roughness/metalness maps to every map.
+
+## v6.5: Stronger PShade-inspired visual stack (2026-11-02)
+
+Previous versions changed BasePart.Reflectance and basic camera grading, but the change could be hard to see in normal scenes. The **PShade-style Gloss** mode now drives a **coherent set of Roblox-native visual controls** without copying code from PShade or creating fake reflected geometry.
+
+### Changes
+- **Cinematic** and **Max** presets gain greater color contrast, exposure headroom and bloom. Existing preset names, tabs, buttons and slider ranges are retained.
+- **PShade-style Gloss** now adjusts Lighting alongside the material reflectance: Ambient/OutdoorAmbient lift shadow readability, ColorShift top/bottom provides restrained warm/cool fill, EnvironmentSpecularScale and DiffuseScale are boosted within legal [0,1] ranges, and ExposureCompensation gives modest extra brightness without bleaching the scene. Original map values remain the starting point, not a forced replacement.
+- **Color correction** gets slightly richer saturation and moderate contrast, with a small brightness lift. These do not increase true texture resolution or create real HDR output.
+- **Bloom** has a lower threshold and stronger—but still capped—intensity so highlights read better without reproducing the white-water clipping observed in earlier screenshots.
+- **Glossy coating** uses a 0..1 formula weighted by Glossy, Reflectance and SurfaceStrength sliders, and then caps textured parts and character meshes at safer values. Material, texture maps, decals, clothing and physics are **never overwritten**.
+- **Water** and **Fog** controls retain their prior behavior and existing map-aware base values. No shadow-map bypass, external shader injection or 3D reflection clones are used.
+- **Responsiveness** retains coalesced ~35 ms slider applications, local 0.10-second tweens while dragging, and nearby spatial updates. Forced full-area refresh on every drag was *not* added because it causes frame spikes in dense maps.
+- **No attempt to write Lighting.Technology**. The legacy Technology field was superseded by LightingStyle and PrioritizeLightingQuality, which may be inaccessible to ordinary client scripts; all optional writes are protected and fail gracefully.
+
+### Suggested test in a fresh game session
+
+1. Open the floating round button on the right and select **LOOKS → PShade-style Gloss** with **Cinematic**.
+2. Compare the exact same camera view with **Original** while keeping the same time mode. Color, environment brightness and bloom should be noticeably different where those Roblox features are permitted.
+3. Move Glossy, Reflectance and SurfaceStrength from 0% to 100%; observe the `Ref props` status and appearance of smooth plastic / metal / accessories. A successful property write does **not** prove SSR or guarantee a visible effect on every material.
+4. Adjust **SHADOW → ShadowLift** and **Ambient** in a dark doorway and ensure it is legible without becoming as bright as the sunlit street.
+5. Test off, reset, Before/After, respawn, and moving the panel. Off should restore the original captured map Lighting, water and part property values.
+6. For faithful 3D reflections that move with surrounding geometry, Roblox Studio-authored custom scene-specific render solutions are necessary; ordinary client Luau + Xeno does not expose a general SSR shader pipeline.
+
+### What was verified
+File content, controlled patch replacement, required controller paths, texture-protection guards and GitHub commit can be checked statically. This is **not** a runtime render test in Roblox, and display results may vary by graphics quality or experience scripts.
+
