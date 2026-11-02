@@ -1,4 +1,4 @@
-# Ultra Visual Suite v6.1 — Cinematic Edition (Reflection and Slider Repair)
+# Ultra Visual Suite v6.2 — Cinematic Edition (Client Reflection Probe)
 
 ## Files
 - `UltraVisualSuite-v6-Cinematic-ALL-IN-ONE.lua`: **complete standalone Luau source** (all settings, controller and GUI in one file). Intended for client-side execution in environments where scripts are authorized.
@@ -91,3 +91,26 @@ Avoid forcing metalness globally on pavement, clothing, grass, or stone: this ca
 ### Validation limitations
 
 Code review and static structure checks are not Roblox Luau compilation or a rendered Play Solo test. A Roblox runtime test is required to confirm the appearance on each map, quality level, and device.
+
+## v6.2: client-only execution and reflection diagnostics
+
+This code can run client-side without ModuleScripts, server DataStore, HTTP permissions within the script, or any executor-specific hooks. A third-party executor (including Xeno) **does not add an SSR renderer**, native material rewriting, PBR texture processing or framebuffer access. Executor compatibility varies with client versions and permissions. No bypass or permission escalation is attempted.
+
+### Reflection Test
+
+1. Join the game, open **VISUALS (F3) > SYSTEM > REFLECTION TEST | 12 DETIK**.
+2. Three **local-only** comparison spheres are created directly in front of the camera for 12 seconds:
+   - **SMOOTH 0%**: SmoothPlastic and Reflectance=0
+   - **SMOOTH 100%**: SmoothPlastic and Reflectance=1
+   - **METAL 100%**: Metal and Reflectance=1
+3. Compare the spheres without moving the camera. If the two SmoothPlastic spheres look identical, the renderer/environment/material combination is not displaying the reflective result, **even when Lua successfully sets the property**. The script cannot force SSR in that case.
+4. The spheres are tagged `UVS_Exclude` so the glossy scanner will not override them; they are non-collidable and removed automatically.
+5. If a scene resets or lighting is controlled by game scripts, results may vary. A local script cannot enforce server-owned or renderer-restricted behavior.
+
+### Exact-zero slider behavior
+
+In previous builds, Reflectance 0% still preserved a 45% glossy contribution through the formula `(.45 + x * 1.05)`. It now uses `x * 1.65` and guards the metal/wet floors with the same slider value. The glossy slider is still a best-effort local `BasePart.Reflectance` adjustment. Material and SurfaceAppearance texture maps are never replaced.
+
+### Security note
+
+An external executor injects untrusted code into your client. Prefer Roblox Studio for your own experiences; avoid unknown scripts and do not assume third-party execution is risk-free or supported by Roblox.
