@@ -1,5 +1,5 @@
 --!strict
--- ULTRA VISUAL SUITE v6.1.0 | Standalone client-side visual controller
+-- ULTRA VISUAL SUITE v6.2.0 | Standalone client-side visual controller
 -- Standalone Luau build: no ModuleScript or RemoteEvent dependency.
 -- Intended for authorized client-side use only. No real DLSS/AI upscaling.
 -- No account data, HTTP requests, external services, or server persistence.
@@ -242,6 +242,8 @@ function Controller.new(settings: any): any
     self.trackedCount = 0
     self.reflectActive = 0
     self.reflectFailures = 0
+    self.probeFolder = nil
+    self.probeGeneration = 0
     self.refreshGeneration = 0
     self.glossSliderKey = ""
     self.scheduleToken = 0
@@ -285,7 +287,7 @@ function Controller.new(settings: any): any
     end
     self.folder = Instance.new("Folder")
     self.folder.Name = "UVS_Runtime"
-    self.folder:SetAttribute("Build", "6.1.0")
+    self.folder:SetAttribute("Build", "6.2.0")
     self.folder.Parent = Lighting
 
     table.insert(self.connections, Lighting.Changed:Connect(function(property)
@@ -527,6 +529,8 @@ function Controller:RestoreLamps()
 end
 function Controller:Restore()
     self:StopTweens()
+    self.probeGeneration+=1
+    if self.probeFolder then self.probeFolder:Destroy();self.probeFolder=nil end
     self.applying=true
     self.ownUntil=os.clock()+1.2
     restore(Lighting,self.originalLighting)
@@ -640,16 +644,23 @@ function Controller:UpdatePart(part: BasePart)
     local s=self.state.sliders
     local scale=p.gloss*s.Glossy*(.35+s.SurfaceStrength*.85)
     local amount=if style=="Polished" then .95 elseif style=="Wet Look" then 1.04 else 1.32
-    local target=base*scale*amount*(.45+s.Reflectance*1.05)
-    if material==Enum.Material.Metal or material==Enum.Material.DiamondPlate then
-        target=math.max(target,.14*scale*amount)
+    -- Reflectance slider must have a real zero rather than retaining 45%.
+    local target=base*scale*amount*(s.Reflectance*1.65)
+    if style=="Chrome Highlights" and s.Glossy>0 and s.Reflectance>0 then
+        local minimum=if material==Enum.Material.Metal or material==Enum.Material.DiamondPlate
+            then .32 elseif material==Enum.Material.SmoothPlastic then .27
+            elseif material==Enum.Material.Glass then .20 else 0
+        target=math.max(target,minimum*s.Glossy*s.Reflectance)
     end
-    if wet then target=math.max(target,.19*scale) end
+    if material==Enum.Material.Metal or material==Enum.Material.DiamondPlate then
+        target=math.max(target,.14*scale*amount*s.Reflectance)
+    end
+    if wet then target=math.max(target,.19*scale*s.Reflectance) end
     local cap=if style=="Chrome Highlights" then .56 else .34
     if character then
-        cap=if textured then .125 else .19
+        cap=if textured then .20 else .25
     elseif textured then
-        cap=math.min(cap,.23)
+        cap=math.min(cap,.26)
     end
     target=math.clamp(target,0,cap)
     local old=self.parts[part]
@@ -698,6 +709,66 @@ function Controller:RefreshTrackedParts()
         self:Notify()
     end)
 end
+function Controller:ReflectionProbe(): string
+    -- Standard Roblox APIs only. No undocumented executor APIs and no SSR.
+    local camera=Workspace.CurrentCamera
+    if not camera then return "Kamera tidak tersedia" end
+    if self.probeFolder then self.probeFolder:Destroy();self.probeFolder=nil end
+    self.probeGeneration+=1
+    local generation=self.probeGeneration
+    local folder=Instance.new("Folder")
+    folder.Name="UVS_ReflectionProbe"
+    folder.Parent=Workspace
+    self.probeFolder=folder
+
+    local cases={
+        {name="SMOOTH 0%",material=Enum.Material.SmoothPlastic,reflectance=0},
+        {name="SMOOTH 100%",material=Enum.Material.SmoothPlastic,reflectance=1},
+        {name="METAL 100%",material=Enum.Material.Metal,reflectance=1},
+    }
+    local written=0
+    for index,data in ipairs(cases) do
+        local ball=Instance.new("Part")
+        ball.Name="UVS_Probe_"..index
+        ball.Shape=Enum.PartType.Ball
+        ball.Size=Vector3.new(2,2,2)
+        ball.Color=Color3.fromRGB(195,198,206)
+        ball.Material=data.material
+        ball.Reflectance=data.reflectance
+        ball.Anchored=true
+        ball.CanCollide=false
+        ball.CanTouch=false
+        ball.CanQuery=false
+        ball.CastShadow=false
+        ball.CFrame=camera.CFrame*CFrame.new((index-2)*2.7,-.5,-11)
+        CollectionService:AddTag(ball,"UVS_Exclude")
+        ball.Parent=folder
+        local sign=Instance.new("BillboardGui")
+        sign.Size=UDim2.fromOffset(150,32)
+        sign.StudsOffset=Vector3.new(0,1.6,0)
+        sign.AlwaysOnTop=true
+        sign.Adornee=ball
+        sign.Parent=ball
+        local caption=Instance.new("TextLabel")
+        caption.Size=UDim2.fromScale(1,1)
+        caption.BackgroundColor3=Color3.fromRGB(26,33,46)
+        caption.BackgroundTransparency=.16
+        caption.TextColor3=Color3.fromRGB(245,248,255)
+        caption.Font=Enum.Font.GothamMedium
+        caption.TextSize=11
+        caption.Text=data.name
+        caption.Parent=sign
+        if math.abs(ball.Reflectance-data.reflectance)<.001 then written+=1 end
+    end
+    task.delay(12,function()
+        if self.alive and self.probeGeneration==generation then
+            if folder.Parent then folder:Destroy() end
+            if self.probeFolder==folder then self.probeFolder=nil end
+        end
+    end)
+    return string.format("Tes: %d/3 properti berhasil disetel. Bandingkan bola SMOOTH 0%% dan 100%%: jika terlihat sama, renderer tidak menghasilkan refleksi yang diminta.",written)
+end
+
 function Controller:SurfaceRefresh()
     local f=self.state.features
     local key=table.concat({effective(self),self.state.finish,self.state.weather,
@@ -1315,11 +1386,19 @@ for _,name in ipairs(Config.SliderOrder) do
 end
 
 heading("TOOLS")
-local rendererNote=text(scroll,"REF counts successful property changes, not real SSR. Roblox may ignore reflections for certain materials. Studio PBR maps must exist beforehand.",11)
+local rendererNote=text(scroll,"Client Xeno: REF menghitung perubahan properti, bukan SSR. Material tertentu bisa mengabaikan Reflectance. Gunakan tes bola untuk memeriksa renderer.",11)
 rendererNote.Size=UDim2.new(1,-3,0,55)
 rendererNote.TextColor3=Color3.fromRGB(159,176,193)
 rendererNote.LayoutOrder=nextOrder()
 tagTab(rendererNote)
+local probeButton=button(scroll,"REFLECTION TEST  |  12 DETIK")
+probeButton.LayoutOrder=nextOrder()
+tagTab(probeButton)
+probeButton.Activated:Connect(function()
+    local ok,result=pcall(function() return graphics:ReflectionProbe() end)
+    rendererNote.Text=if ok then result else "Tes refleksi gagal: "..tostring(result)
+    print("[UVS v6.2 Reflection Probe]",rendererNote.Text)
+end)
 local adaptive=button(scroll,"Adaptive: ON")
 adaptive.LayoutOrder=nextOrder()
 tagTab(adaptive)
@@ -1505,7 +1584,7 @@ end
 shutdown.OnInvoke=cleanup
 render()
 -- The UVS_Shutdown BindableFunction handles re-execution cleanup.
-print("[UVS v6.1] Loaded | preset:",graphics:GetState().preset,"mode:",graphics:GetState().mode,"finish:",graphics:GetState().finish)
-print("[UVS v6.1] F3 / VISUALS. All finishes preserve texture maps; real SSR is unavailable.")
+print("[UVS v6.2] Loaded | preset:",graphics:GetState().preset,"mode:",graphics:GetState().mode,"finish:",graphics:GetState().finish)
+print("[UVS v6.2] F3 / VISUALS. All finishes preserve texture maps; real SSR is unavailable.")
 
 end
