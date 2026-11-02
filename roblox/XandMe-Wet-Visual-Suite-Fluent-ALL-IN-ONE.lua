@@ -22,6 +22,7 @@ _G.XandMeWetVisualSuite=Suite
 Suite.Alive=true
 local connections={}
 local partOriginals=setmetatable({},{__mode="k"})
+local trackedCharacters=setmetatable({},{__mode="k"})
 local layers={}
 local ownedEffects={}
 local lightingOriginal={}
@@ -193,6 +194,7 @@ local function applyCharacterPart(part,model)
 end
 local function applyCharacter(model)
     if not model or not model.Parent then return end
+    trackedCharacters[model]=true
     for _,v in ipairs(model:GetDescendants())do
         if v:IsA("BasePart") then applyCharacterPart(v,model)end
     end
@@ -208,6 +210,12 @@ local function scanCharacters()
             and obj:FindFirstChildOfClass("Humanoid") then
             applyCharacter(obj)
         end
+    end
+end
+local function refreshKnownCharacters()
+    for model in pairs(trackedCharacters)do
+        if model and model.Parent then applyCharacter(model)
+        else trackedCharacters[model]=nil end
     end
 end
 local function restoreCharacterOnly()
@@ -469,7 +477,7 @@ local function syncControls()
 end
 local function changed(kind)
     if kind=="char" then
-        if S.enabled and S.charEnabled then scanCharacters()
+        if S.enabled and S.charEnabled then refreshKnownCharacters()
         else restoreCharacterOnly() end
     elseif kind=="wet" then
         if not S.varnishEnabled then clearLayers()
@@ -477,7 +485,8 @@ local function changed(kind)
     elseif kind=="wetValues" then
         refreshLayers()
     elseif kind=="lighting" then
-        applyLighting()
+        if S.enabled and S.lightingEnabled then applyLighting()
+        else restoreLighting() end
     end
 end
 local function rowButton(holder,label,callback,tint)
