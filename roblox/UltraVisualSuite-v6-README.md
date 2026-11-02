@@ -1,4 +1,4 @@
-# Ultra Visual Suite v6.3 — Cinematic Edition (Instant Nearby + Right Floating UI)
+# Ultra Visual Suite v6.4 — Cinematic Edition (PShade-style Native Gloss)
 
 ## Files
 - `UltraVisualSuite-v6-Cinematic-ALL-IN-ONE.lua`: **complete standalone Luau source** (all settings, controller and GUI in one file). Intended for client-side execution in environments where scripts are authorized.
@@ -138,3 +138,23 @@ An external executor injects untrusted code into your client. Prefer Roblox Stud
 ### Verification boundary
 
 GitHub fetch and static source checks confirm the code paths and file consistency, not in-game rendering. Roblox Studio/client and Xeno runtime testing must be performed locally; never claim the result is true SSR.
+
+## v6.4: Analysis of PShade Ultimate and fix for ghost-reflection addon
+
+The provided reference loader `randomstring0/pshade-ultimate/src/cd.lua` loads executable Luau from `src/back.json` (despite the .json extension). The examined PShade 1.4.9 source uses native Roblox reflection by setting `BasePart.Reflectance` on parts, plus skybox/Lighting/post-processing/water adjustments. It simulates indirect illumination through raycasts and local PointLights. It does not implement SSR or solve scene reflections with mirrored geometry.
+
+**Changes applied here independently, without copying PShade source:**
+- Adds **PShade-style Gloss** surface mode to LOOKS as the default. It sets native Reflectance using three existing sliders: Glossy, Reflectance, SurfaceStrength. Its slider range is genuinely 0..1.
+- Allows stronger skybox reflections on plain world parts and higher caps on textured meshes/character accessories without replacing Material, Color, clothes, SurfaceAppearance, Decals, or TextureID. Some materials/renderers may still ignore Reflectance.
+- Enables the existing Characters switch by default for glossy avatar accessories, but it can be disabled. Nearby character BaseParts are updated even when CanQuery=false; limits are 18 players and 55 parts each per pass.
+- Removes remnants of the previous experimental **UVS_FakeReflection** add-on on startup, including its transparent 3D clone buildings and its floating panel. The old addon never clipped reflections into a road/water surface and produced the reported ghost buildings.
+- Retains the draggable circular right-side UI, per-slider precision, camera effects, Off/Before restoration and bounded nearby updates.
+
+**Important:** This mode resembles PShade's native gloss technique, not external SSR, DX shader injection or real mirror reflections. The source is original and doesn't use executor-only sethiddenproperty, RemoteEvent, File IO, or external runtime downloads.
+
+### Testing
+1. Rejoin the game or run the v6.4 loader after the old fake reflection addon. The translucent ghost buildings should disappear.
+2. Open the right circular menu → LOOKS → PShade-style Gloss and Cinematic. Glossy, Reflectance and SurfaceStrength can be adjusted from 0 to 100%.
+3. Inspect smooth plastic, metal, and the avatar at a fixed camera position. Dark unlit surfaces may have limited highlights; the environment's skybox drives most reflected appearance.
+4. Compare with Original and then Off to confirm all tracked native property changes restore. The old fake-addon clone objects are intentionally destroyed.
+5. For true texture-mapped wet materials in your **own** experience, author SurfaceAppearance maps in Roblox Studio; a client-only executor can't supply new roughness/metalness maps to every map.
