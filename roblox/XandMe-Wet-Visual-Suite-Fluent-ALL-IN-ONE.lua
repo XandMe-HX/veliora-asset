@@ -1,5 +1,5 @@
 --!nocheck
--- XandMe Wet Visual Suite v1.2 | Cinematic Fog & Lighting Edition
+-- XandMe Wet Visual Suite v1.3 | God Rays & Sunlight Shafts Edition
 -- Self-contained client Luau. Native Roblox effects, not SSR or neural upscaling.
 -- Install as a LocalScript in StarterPlayerScripts in owned games, or run client-side.
 -- Cleanup from old sessions is not possible if old scripts never exposed shutdown.
@@ -50,7 +50,8 @@ local S={
     contrast=.14,saturation=.12,ccBrightness=0,
     fogEnabled=true,atmosphereDensity=.32,atmosphereHaze=1.50,
     atmosphereGlare=.13,atmosphereOffset=.04,fogDistance=.52,fogTint=.45,
-    sunRaysEnabled=true,sunRaysIntensity=.075,sunRaysSpread=.78,
+    sunRaysEnabled=true,sunRaysIntensity=.55,sunRaysSpread=.89,
+    sunlightGlow=.40,
     terrainWaterReflectance=.22,terrainWaterTransparency=.25,
     terrainWaterWaveSize=.16,terrainWaterWaveSpeed=14,
     quality="Ultra",mode="Auto",menuOpen=false,selectedTab="looks",
@@ -66,25 +67,25 @@ local QUALITY_PRESETS={
         brightness=1.75,exposure=-.10,shadowSoftness=.32,bloomIntensity=.10,
         bloomSize=20,contrast=.09,saturation=.08,shadowLift=.48,highlightProtection=.65,
         atmosphereDensity=.24,atmosphereHaze=.85,
-        atmosphereGlare=.06,sunRaysIntensity=.04},
+        atmosphereGlare=.06,sunRaysIntensity=.27,sunlightGlow=.20},
     Ultra={charReflectance=.45,charAccessoryBoost=.12,
         overlayReflectance=.08,overlayTransparency=.83,overlayDarkness=.12,
         brightness=1.95,exposure=-.04,shadowSoftness=.22,bloomIntensity=.15,
         bloomSize=27,contrast=.14,saturation=.12,shadowLift=.57,highlightProtection=.60,
         atmosphereDensity=.32,atmosphereHaze=1.5,
-        atmosphereGlare=.13,sunRaysIntensity=.075},
+        atmosphereGlare=.13,sunRaysIntensity=.55,sunlightGlow=.40},
     ["High Ultra"]={charReflectance=.60,charAccessoryBoost=.17,
         overlayReflectance=.11,overlayTransparency=.83,overlayDarkness=.13,
         brightness=2.03,exposure=-.02,shadowSoftness=.17,bloomIntensity=.18,
         bloomSize=30,contrast=.16,saturation=.14,shadowLift=.61,highlightProtection=.60,
         atmosphereDensity=.35,atmosphereHaze=1.75,
-        atmosphereGlare=.17,sunRaysIntensity=.10},
+        atmosphereGlare=.17,sunRaysIntensity=.68,sunlightGlow=.46},
     Max={charReflectance=.78,charAccessoryBoost=.23,
         overlayReflectance=.15,overlayTransparency=.81,overlayDarkness=.14,
         brightness=2.10,exposure=0,shadowSoftness=.12,bloomIntensity=.21,
         bloomSize=32,contrast=.19,saturation=.16,shadowLift=.65,highlightProtection=.58,
         atmosphereDensity=.38,atmosphereHaze=1.95,
-        atmosphereGlare=.21,sunRaysIntensity=.12},
+        atmosphereGlare=.21,sunRaysIntensity=.81,sunlightGlow=.52},
     Off={off=true},
 }
 local MODE_ORDER={"Auto","Day","Golden Hour","Sunset","Dusk",
@@ -130,6 +131,7 @@ local SAVE_FIELDS={
     "contrast","saturation","ccBrightness","fogEnabled",
     "atmosphereDensity","atmosphereHaze","atmosphereGlare","atmosphereOffset",
     "fogDistance","fogTint","sunRaysEnabled","sunRaysIntensity","sunRaysSpread",
+    "sunlightGlow",
     "terrainWaterReflectance","terrainWaterTransparency","terrainWaterWaveSize",
     "terrainWaterWaveSpeed","quality","mode"
 }
@@ -144,8 +146,8 @@ local FIELD_RANGES={
     contrast={0,.4},saturation={0,.4},ccBrightness={-.1,.1},
     atmosphereDensity={0,.6},atmosphereHaze={0,3.5},
     atmosphereGlare={0,1},atmosphereOffset={-.35,.65},
-    fogDistance={0,1},fogTint={0,1},sunRaysIntensity={0,.25},
-    sunRaysSpread={0,1},terrainWaterReflectance={0,1},
+    fogDistance={0,1},fogTint={0,1},sunRaysIntensity={0,1},
+    sunRaysSpread={0,1},sunlightGlow={0,1},terrainWaterReflectance={0,1},
     terrainWaterTransparency={0,1},terrainWaterWaveSize={0,1},
     terrainWaterWaveSpeed={0,40}
 }
@@ -203,6 +205,13 @@ local function importSaved(container)
             local slot=src[tostring(i)]
             if type(slot)=="table" and type(slot.data)=="table" then
                 local name=if type(slot.name)=="string" then slot.name else "Preset "..i
+                -- v1/v2 saves encoded the sun-ray strength on a 0-.25 scale.
+                -- Preserve their visible look on the expanded 0..1 control.
+                if (tonumber(container.version) or 1)<3
+                    and type(slot.data.sunRaysIntensity)=="number" then
+                    slot.data.sunRaysIntensity=math.clamp(
+                        slot.data.sunRaysIntensity*5.1,0,1)
+                end
                 savedSlots[tostring(i)]={name=string.sub(name,1,32),data=slot.data}
             end
         end
@@ -226,7 +235,7 @@ if not dataRead then
     importSaved(rawget(_G,"XandMeWetVisualSuiteSaved"))
 end
 local function saveContainer()
-    local out={version=1,slots=savedSlots,selectedSlot=selectedSlot,autoLoad=true}
+    local out={version=3,slots=savedSlots,selectedSlot=selectedSlot,autoLoad=true}
     _G.XandMeWetVisualSuiteSaved=out
     if diskSaveAvailable then
         local ok,encoded=pcall(function()return HttpService:JSONEncode(out)end)
@@ -325,9 +334,12 @@ local function applyLighting()
 
     local bloom=getEffect("BloomEffect","XWM_Bloom")
     bloom.Enabled=true
-    bloom.Intensity=clamp(S.bloomIntensity*profile.bloom*(1-protection*.24),0,.35)
+    -- Sunlight glow adds restrained lens bloom, not global white haze.
+    local glow=if S.sunRaysEnabled then S.sunlightGlow else 0
+    bloom.Intensity=clamp(
+        S.bloomIntensity*profile.bloom*(1-protection*.24)*(1+.22*glow),0,.38)
     bloom.Size=S.bloomSize
-    bloom.Threshold=clamp(S.bloomThreshold+.14*protection,.6,2)
+    bloom.Threshold=clamp(S.bloomThreshold+.14*protection-.07*glow,.65,2)
     local color=getEffect("ColorCorrectionEffect","XWM_Color")
     color.Enabled=true
     color.Brightness=S.ccBrightness-.008*protection
@@ -355,7 +367,8 @@ local function applyLighting()
             at.Density=clamp(S.atmosphereDensity*multiplier*distanceFactor,0,.7)
             at.Haze=clamp(S.atmosphereHaze*multiplier*(1.25-.40*S.fogDistance),0,5)
             at.Offset=S.atmosphereOffset
-            at.Glare=clamp(S.atmosphereGlare,0,1)
+            at.Glare=clamp(S.atmosphereGlare+
+                (if S.sunRaysEnabled then .34*S.sunlightGlow else 0),0,1)
             -- Tint stays near the original map palette so distant objects
             -- remain readable instead of being washed into bright white.
             local baseColor=if atmosphereOriginal and atmosphereOriginal.Color
@@ -386,9 +399,16 @@ local function applyLighting()
         sunRaysOriginal={}
         saveProps(rays,{"Enabled","Intensity","Spread"},sunRaysOriginal)
     end
-    rays.Enabled=S.sunRaysEnabled and S.fogEnabled
+    -- Sun rays are independently switchable from fog. The occlusion effect
+    -- appears when the sun is in/near the camera view and geometry blocks it.
+    -- It does not create rays from lamps or real volumetric fog shafts.
+    rays.Enabled=S.sunRaysEnabled
     if rays.Enabled then
-        rays.Intensity=clamp(S.sunRaysIntensity*(1-.48*protection),0,.25)
+        local shaft=S.sunRaysIntensity
+        local modeStrength=if S.mode=="Golden Hour" or S.mode=="Sunset"
+            then 1.14 elseif S.mode=="Realistic" then .82 else 1
+        rays.Intensity=clamp(.78*(shaft^1.18)*modeStrength
+            *(1-.18*protection),0,.82)
         rays.Spread=clamp(S.sunRaysSpread,0,1)
     end
 
@@ -1013,16 +1033,17 @@ slider(fogSection,"Fog Offset","atmosphereOffset",-.35,.65,"fog")
 slider(fogSection,"Jarak kabut (perkiraan)","fogDistance",0,1,"fog")
 slider(fogSection,"Fog Color Tint","fogTint",0,1,"fog")
 local raySection=section(pages.fog,"SUNLIGHT SCATTERING")
-toggle(raySection,"Sun Rays","sunRaysEnabled","fog")
-slider(raySection,"Sun Rays Intensity","sunRaysIntensity",0,.25,"fog")
-slider(raySection,"Sun Rays Spread","sunRaysSpread",0,1,"fog")
+toggle(raySection,"Sun Rays / God Rays","sunRaysEnabled","fog")
+slider(raySection,"Light Shafts • kuat","sunRaysIntensity",0,1,"fog")
+slider(raySection,"Light Shafts • lebar","sunRaysSpread",0,1,"fog")
+slider(raySection,"Sunlight Glow","sunlightGlow",0,1,"fog")
 rowButton(raySection,"Cinematic Fog (seimbang)",function()
     S.fogEnabled=true
     S.atmosphereDensity=.32;S.atmosphereHaze=1.50
     S.atmosphereGlare=.13;S.atmosphereOffset=.04
     S.fogDistance=.52;S.fogTint=.45
-    S.sunRaysEnabled=true;S.sunRaysIntensity=.075
-    S.sunRaysSpread=.78
+    S.sunRaysEnabled=true;S.sunRaysIntensity=.55
+    S.sunRaysSpread=.89;S.sunlightGlow=.40
     S.quality="Custom"
     applyLighting();status="Cinematic Fog aktif";syncControls()
 end)
@@ -1031,15 +1052,40 @@ rowButton(raySection,"Misty / Fog Tebal",function()
     S.atmosphereDensity=.46;S.atmosphereHaze=2.25
     S.atmosphereGlare=.12;S.atmosphereOffset=-.03
     S.fogDistance=.25;S.fogTint=.50
-    S.sunRaysEnabled=true;S.sunRaysIntensity=.055
+    S.sunRaysEnabled=true;S.sunRaysIntensity=.50
+    S.sunRaysSpread=.90;S.sunlightGlow=.43
     S.quality="Custom"
     applyLighting();status="Misty Fog aktif";syncControls()
 end,Color3.fromRGB(60,88,124))
+rowButton(raySection,"GOD RAYS • Cinematic Strong",function()
+    S.fogEnabled=true;S.sunRaysEnabled=true
+    S.sunRaysIntensity=.85;S.sunRaysSpread=.95
+    S.sunlightGlow=.63
+    S.atmosphereDensity=.30;S.atmosphereHaze=1.45
+    S.atmosphereGlare=.20;S.atmosphereOffset=.04
+    S.fogDistance=.58;S.highlightProtection=.64
+    S.quality="Custom"
+    applyLighting();status="God Rays Cinematic aktif";syncControls()
+end,Color3.fromRGB(47,91,138))
+rowButton(raySection,"SUNBEAMS • Cahaya Pagi",function()
+    S.fogEnabled=true;S.sunRaysEnabled=true
+    S.mode="Golden Hour"
+    S.sunRaysIntensity=.72;S.sunRaysSpread=.90
+    S.sunlightGlow=.51
+    S.atmosphereDensity=.28;S.atmosphereHaze=1.30
+    S.atmosphereGlare=.22;S.highlightProtection=.67
+    S.quality="Custom"
+    applyLighting();status="Cahaya pagi aktif";syncControls()
+end,Color3.fromRGB(47,91,138))
+rowButton(raySection,"NONAKTIFKAN LIGHT SHAFTS",function()
+    S.sunRaysEnabled=false
+    applyLighting();status="Light Shafts nonaktif";syncControls()
+end,Color3.fromRGB(116,65,77))
 local note=make("TextLabel",pages.fog,{
     Size=UDim2.new(1,-16,0,52),BackgroundTransparency=1,
     TextWrapped=true,TextYAlignment=Enum.TextYAlignment.Top,
     Font=Enum.Font.Gotham,TextSize=11,TextColor3=sub,
-    Text="Fog Distance pada Atmosphere adalah perkiraan visual, bukan FogEnd dalam studs. Sun Rays mengikuti arah matahari."
+    Text="Light Shafts muncul ketika matahari terlihat atau terhalang objek dari arah kamera. Bukan volumetric beam sungguhan. Fog Distance adalah perkiraan visual."
 })
 
 local presetSection=section(pages.presets,"SAVE / LOAD PERSONAL PRESET")
@@ -1307,4 +1353,4 @@ showTab(S.selectedTab)
 syncControls()
 fullApply()
 syncControls()
-print("[XandMe Wet Visual Suite v1.2] Cinematic Fog + Lighting restored. Press F3 or V.")
+print("[XandMe Wet Visual Suite v1.3] God Rays / Sunlight Shafts ready. Press F3 or V.")
