@@ -1,5 +1,5 @@
 --!strict
--- ULTRA VISUAL SUITE v6.4.0 | Standalone client-side visual controller
+-- ULTRA VISUAL SUITE v6.5.0 | Standalone client-side visual controller
 -- Standalone Luau build: no ModuleScript or RemoteEvent dependency.
 -- Intended for authorized client-side use only. No real DLSS/AI upscaling.
 -- No account data, HTTP requests, external services, or server persistence.
@@ -44,10 +44,10 @@ C.Order = {"Off", "Balanced", "Ultra", "High Ultra", "Cinematic", "Max"}
 C.Presets = {
     Off = {specular=0,diffuse=0,shadow=0,bloom=0,bloomSize=0,saturation=0,contrast=0,density=0,rays=0,dof=0,gloss=0},
     Balanced = {specular=.72,diffuse=.52,shadow=.32,bloom=.11,bloomSize=16,saturation=.05,contrast=.045,density=.075,rays=.015,dof=0,gloss=.55},
-    Ultra = {specular=.87,diffuse=.65,shadow=.26,bloom=.16,bloomSize=19,saturation=.065,contrast=.065,density=.09,rays=.027,dof=0,gloss=.76},
-    ["High Ultra"] = {specular=.96,diffuse=.72,shadow=.23,bloom=.20,bloomSize=21,saturation=.08,contrast=.08,density=.10,rays=.038,dof=0,gloss=.89},
-    Cinematic = {specular=1,diffuse=.85,shadow=.24,bloom=.22,bloomSize=25,saturation=.11,contrast=.115,density=.1,rays=.04,dof=0,gloss=.97},
-    Max = {specular=1,diffuse=.95,shadow=.12,bloom=.31,bloomSize=29,saturation=.15,contrast=.15,density=.11,rays=.07,dof=0,gloss=1},
+    Ultra = {specular=.92,diffuse=.72,shadow=.27,bloom=.18,bloomSize=20,saturation=.08,contrast=.075,density=.09,rays=.03,dof=0,gloss=.82},
+    ["High Ultra"] = {specular=1,diffuse=.85,shadow=.23,bloom=.23,bloomSize=24,saturation=.10,contrast=.11,density=.10,rays=.04,dof=0,gloss=.94},
+    Cinematic = {specular=1,diffuse=.92,shadow=.21,bloom=.27,bloomSize=28,saturation=.13,contrast=.135,density=.105,rays=.05,dof=0,gloss=1},
+    Max = {specular=1,diffuse=1,shadow=.14,bloom=.33,bloomSize=32,saturation=.15,contrast=.16,density=.12,rays=.075,dof=0,gloss=1},
 }
 C.FinishOrder = {"Original", "Polished", "Wet Look", "Chrome Highlights", "PShade-style Gloss"}
 -- These modes modify reflectance only. None swaps Metal, Glass or SmoothPlastic.
@@ -94,11 +94,11 @@ C.Defaults = {
         Bloom=true,Colors=true,Atmosphere=true,Sharpness=true,DOF=false,Sky=false,
         Water=true,WetGround=false,Lamps=false,CharacterAccents=true,
         Characters=true,Transparent=false,Neon=false,SoftSunRays=true},
-    sliders={Glossy=.94,Reflectance=.75,SurfaceStrength=.80,Specular=.94,
-        ShadowStrength=.55,ShadowSoftness=.22,ShadowLift=.55,Ambient=.45,
-        Bloom=.64,GlowThreshold=.68,Saturation=.57,Contrast=.66,Clarity=.70,
-        HighlightProtection=.75,Exposure=.5,WaterReflection=.58,WaterClarity=.70,WaterDepth=.50,WaterWaves=.40,
-        Density=.30,Haze=.48,FogDistance=.65,SunRays=.65,BatchPace=.54}
+    sliders={Glossy=.98,Reflectance=.93,SurfaceStrength=.95,Specular=1,
+        ShadowStrength=.60,ShadowSoftness=.19,ShadowLift=.72,Ambient=.64,
+        Bloom=.66,GlowThreshold=.67,Saturation=.61,Contrast=.70,Clarity=.76,
+        HighlightProtection=.72,Exposure=.55,WaterReflection=.58,WaterClarity=.70,WaterDepth=.50,WaterWaves=.40,
+        Density=.26,Haze=.38,FogDistance=.69,SunRays=.62,BatchPace=.54}
 }
 
 function C.Copy(source: any): any
@@ -322,7 +322,7 @@ function Controller.new(settings: any): any
     end
     self.folder = Instance.new("Folder")
     self.folder.Name = "UVS_Runtime"
-    self.folder:SetAttribute("Build", "6.4.0")
+    self.folder:SetAttribute("Build", "6.5.0")
     self.folder.Parent = Lighting
 
     table.insert(self.connections, Lighting.Changed:Connect(function(property)
@@ -744,10 +744,21 @@ function Controller:UpdatePart(part: BasePart)
     -- Reflectance slider must have a real zero rather than retaining 45%.
     local target=base*scale*amount*(s.Reflectance*1.65)
     if style=="PShade-style Gloss" then
-        -- PShade's main visual trick is skybox reflection on all eligible
-        -- BaseParts. Do this locally without cloning a single 3D object.
-        -- Use the existing UVS sliders and preserve Material/TextureID.
-        target=math.clamp(s.Glossy*s.Reflectance*(.23+.77*s.SurfaceStrength),0,1)
+        -- Native skybox-based Reflectance only; preserves texture maps and
+        -- never duplicates geometry. High slider values visibly affect
+        -- materials that actually support Reflectance in the current renderer.
+        local coating=(.30+.85*s.SurfaceStrength)*s.Glossy*s.Reflectance
+        target=math.clamp(coating*1.35,0,1)
+        if material==Enum.Material.Metal or material==Enum.Material.DiamondPlate then
+            target*=1.13
+        elseif material==Enum.Material.Glass then
+            target*=1.09
+        elseif material==Enum.Material.Asphalt or material==Enum.Material.Concrete then
+            target*=.88
+        end
+        if textured then target*=.90 end
+        if character then target*=.94 end
+        target=math.clamp(target,0,1)
     end
     if style=="Chrome Highlights" and s.Glossy>0 and s.Reflectance>0 then
         local minimum=if material==Enum.Material.Metal or material==Enum.Material.DiamondPlate
@@ -762,12 +773,13 @@ function Controller:UpdatePart(part: BasePart)
     local cap=if style=="PShade-style Gloss" then 1
         elseif style=="Chrome Highlights" then .56 else .34
     if style=="PShade-style Gloss" then
-        -- Retain visual detail on mesh faces and clothing while allowing a
-        -- strong, clearly distinguishable skybox highlight on plain objects.
+        -- Material and textures remain untouched. Limit the skybox coating
+        -- on textured avatars so clothes and faces stay legible.
+        cap=.95
         if character then
-            cap=if textured then .55 else .72
+            cap=if textured then .56 else .72
         elseif textured then
-            cap=.62
+            cap=.70
         end
     elseif character then
         cap=if textured then .20 else .25
@@ -928,6 +940,7 @@ function Controller:Apply()
     end
     local preset=Config.Presets[name]
     local f,s=state.features,state.sliders
+    local pshade=state.finish=="PShade-style Gloss"
     local fixed=state.mode~="Auto" and state.mode~="Realistic"
     if not fixed and self.lastFixed then put(Lighting,"ClockTime",self.sourceClock) end
     if not fixed then self.sourceClock=Lighting.ClockTime end
@@ -949,26 +962,46 @@ function Controller:Apply()
         ShadowSoftness=map.ShadowSoftness,
     }
     if f.Lighting then
-        values.Brightness=math.clamp(map.Brightness or 2,.15,5)
+        -- Preserve the game's underlying lighting while lifting shadow
+        -- readability: dark spaces stay darker than directly sunlit surfaces.
+        values.Brightness=math.clamp((map.Brightness or 2)
+            +(if pshade and self.night then .12 else 0),.15,5)
         local a=map.Ambient or Color3.fromRGB(80,80,80)
         local o=map.OutdoorAmbient or Color3.fromRGB(127,127,127)
-        local lift=math.clamp(.34+s.ShadowLift*.47+s.Ambient*.14-s.ShadowStrength*.46,0,.82)
-        local neutral=if self.night then Color3.fromRGB(125,135,155) else Color3.fromRGB(160,159,158)
+        local lift=if pshade then math.clamp(
+            .29+s.ShadowLift*.43+s.Ambient*.16-s.ShadowStrength*.25,0,.76)
+            else math.clamp(.34+s.ShadowLift*.47+s.Ambient*.14-s.ShadowStrength*.46,0,.82)
+        local neutral=if self.night then Color3.fromRGB(125,137,155)
+            else Color3.fromRGB(158,160,167)
         values.Ambient=a:Lerp(neutral,lift)
-        values.OutdoorAmbient=o:Lerp(neutral,math.clamp(lift*.62,0,.54))
+        values.OutdoorAmbient=o:Lerp(neutral,math.clamp(
+            lift*(if pshade then .72 else .62),0,.58))
+        if pshade then
+            -- Subtle top/bottom fill, without flattening the map or forcing
+            -- a constant sun direction. Source colors come from the map.
+            local top=map.ColorShift_Top or Color3.new(1,1,1)
+            local bottom=map.ColorShift_Bottom or Color3.new(0,0,0)
+            values.ColorShift_Top=top:Lerp(Color3.fromRGB(255,241,224),.18)
+            values.ColorShift_Bottom=bottom:Lerp(Color3.fromRGB(95,107,126),.18)
+        end
         if fixed then
             values.Ambient=values.Ambient:Lerp(profile.ambient,.18)
             values.OutdoorAmbient=values.OutdoorAmbient:Lerp(profile.outdoor,.18)
             put(Lighting,"ClockTime",profile.hour)
         end
         -- Unlike max(map, computed), this slider really spans 0..1.
-        values.EnvironmentSpecularScale=math.clamp(preset.specular*s.Specular,0,1)
-        values.EnvironmentDiffuseScale=math.clamp(
-            math.max(map.EnvironmentDiffuseScale or 0,preset.diffuse*(.45+s.Ambient*.55)),0,1)
+        values.EnvironmentSpecularScale=math.clamp(preset.specular*s.Specular
+            *(if pshade then 1.18 else 1),0,1)
+        values.EnvironmentDiffuseScale=math.clamp(math.max(
+            map.EnvironmentDiffuseScale or 0,
+            preset.diffuse*(.45+s.Ambient*.55))*(if pshade then 1.12 else 1),0,1)
+        -- Shadow softness stays linear with the UI: no hidden multiplier.
         values.ShadowSoftness=math.clamp(s.ShadowSoftness,0,1)
         values.ExposureCompensation=math.clamp((map.ExposureCompensation or 0)
-            +(s.Exposure-.5)*.9+(if self.night then .05 else 0)
-            -s.HighlightProtection*(if self.night then .04 else .14)+weather.exposure,-.75,.65)
+            +(s.Exposure-.5)*.85+(if self.night then .05 else 0)
+            -s.HighlightProtection*(if self.night then .03 else .14)
+            +(if pshade then (if self.night then .11 else .055) else 0)
+            +weather.exposure,-.68,.68)
         put(Lighting,"GlobalShadows",true)
         -- May be client-restricted; put() uses protected write.
         put(Lighting,"LightingStyle",Enum.LightingStyle.Realistic)
@@ -1008,11 +1041,17 @@ function Controller:Apply()
 
     if f.Bloom then
         local fx=self:Effect("Bloom")
-        local strength=math.clamp(preset.bloom*(.22+s.Bloom*.9)*profile.bloom
+        local strength=if pshade then math.clamp(
+            (.12+s.Bloom*.30)*profile.bloom*(1-s.HighlightProtection*.28),
+            0,if self.night then .28 else .34)
+            else math.clamp(preset.bloom*(.22+s.Bloom*.9)*profile.bloom
             *(1-s.HighlightProtection*.42),0,if self.night then .21 else .27)
-        if state.mode=="Neon Night" then strength=math.min(strength*1.2,.3) end
-        self:Tween(fx,{Intensity=strength,Size=preset.bloomSize,
-            Threshold=math.clamp(1.30-s.GlowThreshold*.28,.96,1.30)},.55)
+        if state.mode=="Neon Night" then strength=math.min(strength*1.2,.36) end
+        local threshold=if pshade then math.clamp(1.16-s.GlowThreshold*.28,.88,1.22)
+            else math.clamp(1.30-s.GlowThreshold*.28,.96,1.30)
+        self:Tween(fx,{Intensity=strength,
+            Size=if pshade then math.min(40,preset.bloomSize+4) else preset.bloomSize,
+            Threshold=threshold},.4)
         fx.Enabled=true
     else self:DropEffect("Bloom") end
 
@@ -1024,17 +1063,26 @@ function Controller:Apply()
         local fx=self:Effect("Color")
         local sat=if f.Colors then preset.saturation*(.3+s.Saturation*1.35) else 0
         local contrast=if f.Colors then preset.contrast*(.3+s.Contrast*1.4) else 0
-        if f.Sharpness then contrast+=.024*s.Clarity end -- cosmetic pseudo-clarity only
+        if f.Sharpness then contrast+=.024*s.Clarity end -- cosmetic pseudo-clarity, NOT real upscaling
+        if pshade then
+            if f.Colors then sat+=.025;contrast+=.025 end
+            -- Do not crush shadows to make a glossy photo seem sharper.
+            contrast=math.min(contrast,.235)
+        end
         local tint=if f.Colors and fixed
             then Color3.new(1,1,1):Lerp(profile.tint,.20)
             else Color3.new(1,1,1)
-        local bright=if self.night then .009 else 0
+        if pshade and f.Colors then
+            tint=tint:Lerp(Color3.fromRGB(255,249,242),.23)
+        end
+        local bright=(if self.night then .009 else 0)
+            +(if pshade and f.Colors then .014 else 0)
         if self.testing then
             sat=.35;contrast=.17;bright=.06
             tint=Color3.fromRGB(255,185,225)
         end
-        self:Tween(fx,{Saturation=math.clamp(sat,0,.23),
-            Contrast=math.clamp(contrast,0,.23),Brightness=bright,TintColor=tint},.4)
+        self:Tween(fx,{Saturation=math.clamp(sat,0,.26),
+            Contrast=math.clamp(contrast,0,.235),Brightness=bright,TintColor=tint},.35)
         fx.Enabled=true
     else self:DropEffect("Color") end
 
@@ -1832,7 +1880,7 @@ end
 shutdown.OnInvoke=cleanup
 render()
 -- The UVS_Shutdown BindableFunction handles re-execution cleanup.
-print("[UVS v6.4] Loaded | preset:",graphics:GetState().preset,"mode:",graphics:GetState().mode,"finish:",graphics:GetState().finish)
-print("[UVS v6.4] F3 / VISUALS. All finishes preserve texture maps; real SSR is unavailable.")
+print("[UVS v6.5] Loaded | preset:",graphics:GetState().preset,"mode:",graphics:GetState().mode,"finish:",graphics:GetState().finish)
+print("[UVS v6.5] F3 / VISUALS. All finishes preserve texture maps; real SSR is unavailable.")
 
 end
