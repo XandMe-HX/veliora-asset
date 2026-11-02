@@ -176,6 +176,7 @@ local Lighting = game:GetService("Lighting")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
 local CollectionService = game:GetService("CollectionService")
 local MaterialService = game:GetService("MaterialService")
 local RS = game:GetService("ReplicatedStorage")
@@ -675,6 +676,31 @@ function Controller:RefreshNearby(force: boolean?)
                 self.nearbyProcessed[part]=true
                 if i<=90 then self:UpdatePart(part)
                 else self:Queue(part) end
+            end
+        end
+    end
+    -- Character accessories are sometimes CanQuery=false, which spatial
+    -- queries omit. Visit only nearby character models, never the full map.
+    if self.state.features.Characters or self.state.features.CharacterAccents then
+        local playersVisited=0
+        for _,plr in ipairs(Players:GetPlayers()) do
+            if playersVisited>=18 then break end
+            local model=plr.Character
+            local root=model and model:FindFirstChild("HumanoidRootPart")
+            if root and root:IsA("BasePart") and
+                (root.Position-point).Magnitude<=self.nearbyRadius then
+                playersVisited+=1
+                local hits=0
+                for _,member in ipairs(model:GetDescendants()) do
+                    if hits>=55 then break end
+                    if member:IsA("BasePart") then
+                        hits+=1
+                        if force or not self.nearbyProcessed[member] then
+                            self.nearbyProcessed[member]=true
+                            self:Queue(member)
+                        end
+                    end
+                end
             end
         end
     end
