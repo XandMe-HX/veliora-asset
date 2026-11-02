@@ -1,4 +1,4 @@
-# Ultra Visual Suite v6.2 — Cinematic Edition (Client Reflection Probe)
+# Ultra Visual Suite v6.3 — Cinematic Edition (Instant Nearby + Right Floating UI)
 
 ## Files
 - `UltraVisualSuite-v6-Cinematic-ALL-IN-ONE.lua`: **complete standalone Luau source** (all settings, controller and GUI in one file). Intended for client-side execution in environments where scripts are authorized.
@@ -114,3 +114,27 @@ In previous builds, Reflectance 0% still preserved a 45% glossy contribution thr
 ### Security note
 
 An external executor injects untrusted code into your client. Prefer Roblox Studio for your own experiences; avoid unknown scripts and do not assume third-party execution is risk-free or supported by Roblox.
+
+## v6.3: right floating icon, draggable menu, and no whole-map scan (2026-11-02)
+
+- The launcher is a **49×49 circular sliders icon**, initially on the right edge below Roblox's top-bar controls. Tap to open; drag with a mouse or finger to reposition.
+- Settings open as a **right-docked panel**. Drag the panel from its header, use **×** to close, and press **F3** as a keyboard shortcut. The icon stays hidden while the panel is open.
+- Both controls are clamped to the current viewport and the panel is re-docked on resize until manually moved. Existing LOOKS, SHADOW, WATER, FOG and SYSTEM tabs remain intact.
+- The old `Workspace` tree traversal has been removed. The client now applies camera post-processing immediately and uses a **bounded native spatial query** (`Workspace:GetPartBoundsInRadius`) to update nearby queryable BaseParts around the camera. It refreshes as you move, while `DescendantAdded` handles streamed nearby objects.
+- A cap of 650 query results per update and a fast initial batch of 90 parts avoid a large FPS spike. Remaining nearby results are queued without blocking play. Old distant changes are gradually restored while roaming.
+- This **is not "every object in the server instantly"**: invisible/distant objects are not proactively touched, and objects with `CanQuery=false` may not be returned by spatial queries. That is deliberate to preserve FPS.
+- `Ref props` indicates property writes, **not the number of visible scene reflections**. No executor can add universal SSR or DLSS to Roblox through these client APIs.
+- The original Loadstring URL remains unchanged and resolves the latest v6.3 commit.
+
+### Suggested quick test
+
+1. Start a new Roblox client session, execute the same raw loader, and check the **small round sliders icon** at right.
+2. Tap it, move the panel header, close the panel, and drag the launcher to a new position.
+3. Stand next to a SmoothPlastic or Metal object, set **Cinematic + Chrome Highlights**, adjust **Glossy**, **Reflectance**, and **Specular**.
+4. Walk toward more objects and check **Nearby** in the status. No world-wide "SCANNING" progress stage is required.
+5. Use Before/After and Off; tracked property snapshots should restore.
+6. If visible reflectance still does not change, run the **Reflection Test** in the SYSTEM tab. This differentiates property changes from renderer limitations.
+
+### Verification boundary
+
+GitHub fetch and static source checks confirm the code paths and file consistency, not in-game rendering. Roblox Studio/client and Xeno runtime testing must be performed locally; never claim the result is true SSR.
