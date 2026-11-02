@@ -1,4 +1,4 @@
-# Ultra Visual Suite v6 — Cinematic Edition
+# Ultra Visual Suite v6.1 — Cinematic Edition (Reflection and Slider Repair)
 
 ## Files
 - `UltraVisualSuite-v6-Cinematic-ALL-IN-ONE.lua`: **complete standalone Luau source** (all settings, controller and GUI in one file). Intended for client-side execution in environments where scripts are authorized.
@@ -60,3 +60,34 @@ Audio: original royalty-free soft ambient cinematic score, small click sounds fo
 
 ## Notes on tests
 Static source checks are not runtime tests. You must test in Roblox Studio and your own experience. Do not rely on external executors or unaudited remote scripts for security.
+
+## v6.1 targeted fixes (2026-11-02)
+
+- **Root issue:** BasePart.Reflectance reflects the skybox, not the surrounding world geometry. It may be ignored by some materials, including PBR appearances. The suite cannot produce real screen-space reflections (SSR), per-pixel ray tracing, or neural supersampling via Luau.
+- **Specular slider fix:** Lighting.EnvironmentSpecularScale now follows the full normalized 0..1 control. The old max(original, proposed) expression could hold it at 1 permanently.
+- **Fast slider feedback:** slider inputs are stored at floating-point precision and scheduled with an approximately 35 ms coalesced controller cadence; visual bars and numeric labels update immediately, and transition times shorten while dragging.
+- **Glossy batching:** moving Glossy, Reflectance or SurfaceStrength refreshes only tracked parts in small batches, rather than restarting a full Workspace scan each time. Initial/structural scans remain progressive.
+- **Input handling:** pointer capture distinguishes mouse and active touch; the ScrollingFrame is temporarily disabled during dragging, then restored upon release. Keyboard/gamepad Left/Right adjusts a selected slider in increments of 2%.
+- **UI:** restrained slate surfaces, readable text, two-row navigation on mobile, subtle slider thumb, and a status readout with property-level reflection counts.
+- **Diagnostics:** `Ref props N/M` means the client successfully set Reflectance on N of M tracked BaseParts. It is NOT proof of visible SSR, and some Roblox materials will still ignore the property. `Camera OK` reports the camera-local color effect if enabled.
+
+### Verify in Studio
+
+Use your own experience with a base Part set to SmoothPlastic (no SurfaceAppearance), a metallic Part, and a textured MeshPart. In Play Solo, open F3:
+
+1. Choose **Cinematic**, **Chrome Highlights**, then enable **Lighting**, **Glossy**, and **AllObjects**.
+2. Move the **Specular** slider from 0 to 100%; inspect Lighting.EnvironmentSpecularScale in Properties. It should follow 0 → 1 (subject to client write permissions and other scripts).
+3. Move **Glossy** and **Reflectance** from 0 to 100%; inspect the BasePart.Reflectance property and the `Ref props` status. The actual image may not change if the renderer or material ignores Reflectance.
+4. Compare material texture/decal/pattern details before and after. The suite does not replace Material, SurfaceAppearance, TextureID, ColorMap, or clothing.
+5. Drag sliders with mouse and touch and release outside the slider region. Check that scrolling resumes, numbers follow pointer position without 1% quantization, and frame spikes are smaller than the original full-map rescans.
+6. Press **Before/After** or **Off**, verifying the original property snapshot. Test respawn, reopening F3, and rerunning the script to verify cleanup.
+
+### Studio-authored PBR for genuinely realistic glossy materials
+
+For a Roblox experience that **you own**, create the proper MaterialVariant or SurfaceAppearance maps in Studio (roughness + metalness, preserving the color/albedo map). The original suite supports Studio-authored variants by tagging eligible `BasePart` objects `UVS_PBR`, placing matching `UVS_Metal`, `UVS_DiamondPlate`, `UVS_Marble`, or `UVS_Granite` MaterialVariant children in MaterialService, and enabling `PBRVariants`. The client script does not create these maps at runtime.
+
+Avoid forcing metalness globally on pavement, clothing, grass, or stone: this can erase material fidelity and create misleading reflections.
+
+### Validation limitations
+
+Code review and static structure checks are not Roblox Luau compilation or a rendered Play Solo test. A Roblox runtime test is required to confirm the appearance on each map, quality level, and device.
