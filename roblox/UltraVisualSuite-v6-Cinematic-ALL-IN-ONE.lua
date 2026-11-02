@@ -608,6 +608,22 @@ function Controller:RefreshNearby(force: boolean?)
     end
     self.lastNearbyPosition=point
     self.lastNearbyTime=now
+    -- Prune old off-screen changes occasionally; keep local memory bounded
+    -- while roaming without a world-tree traversal or a loading screen.
+    if last and (point-last).Magnitude>24 then
+        task.spawn(function()
+            local index=0
+            for part in pairs(self.parts) do
+                if not self.alive or not self.active then return end
+                if not part.Parent or (part.Position-point).Magnitude>self.nearbyRadius+45 then
+                    self:RestorePart(part)
+                    self.nearbyProcessed[part]=nil
+                end
+                index+=1
+                if index%90==0 then task.wait() end
+            end
+        end)
+    end
     local params=OverlapParams.new()
     params.FilterType=Enum.RaycastFilterType.Exclude
     params.MaxParts=self.nearbyMaxParts
@@ -1172,7 +1188,7 @@ for index=1,3 do
     local knob=Instance.new("Frame")
     knob.Name="Knob"..index
     knob.Size=UDim2.fromOffset(6,6)
-    knob.Position=UDim2.fromOffset((if index==2 then 26 else if index==1 then 18 else 31),11+(index-1)*10)
+    knob.Position=UDim2.fromOffset((if index==2 then 26 elseif index==1 then 18 else 31),11+(index-1)*10)
     knob.BackgroundColor3=Color3.fromRGB(108,185,230)
     knob.BorderSizePixel=0
     knob.Parent=launcher
@@ -1526,6 +1542,7 @@ local function setOpen(value: boolean)
     graphics:MenuBlur(value)
     if animation then animation:Cancel();animation:Destroy();animation=nil end
     if value then panel.Visible=true end
+    launcher.Visible=not value
     local target=if value then 1 else .92
     animation=TweenService:Create(scale,TweenInfo.new(.17,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Scale=target})
     animation:Play()
