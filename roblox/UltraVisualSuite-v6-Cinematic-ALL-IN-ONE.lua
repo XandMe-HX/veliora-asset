@@ -1,5 +1,5 @@
 --!strict
--- ULTRA VISUAL SUITE v6.2.0 | Standalone client-side visual controller
+-- ULTRA VISUAL SUITE v6.3.0 | Standalone client-side visual controller
 -- Standalone Luau build: no ModuleScript or RemoteEvent dependency.
 -- Intended for authorized client-side use only. No real DLSS/AI upscaling.
 -- No account data, HTTP requests, external services, or server persistence.
@@ -243,6 +243,12 @@ function Controller.new(settings: any): any
     self.reflectActive = 0
     self.reflectFailures = 0
     self.probeFolder = nil
+    self.lastNearbyTime = 0
+    self.lastNearbyPosition = nil
+    self.nearbyCount = 0
+    self.nearbyRadius = 105
+    self.nearbyMaxParts = 650
+    self.nearbyProcessed = setmetatable({}, {__mode="k"})
     self.probeGeneration = 0
     self.refreshGeneration = 0
     self.glossSliderKey = ""
@@ -287,7 +293,7 @@ function Controller.new(settings: any): any
     end
     self.folder = Instance.new("Folder")
     self.folder.Name = "UVS_Runtime"
-    self.folder:SetAttribute("Build", "6.2.0")
+    self.folder:SetAttribute("Build", "6.3.0")
     self.folder.Parent = Lighting
 
     table.insert(self.connections, Lighting.Changed:Connect(function(property)
@@ -306,7 +312,11 @@ function Controller.new(settings: any): any
         end
     end))
     table.insert(self.connections, Workspace.DescendantAdded:Connect(function(inst)
-        if inst:IsA("BasePart") and self.active then self:Queue(inst) end
+        if not self.active or not inst:IsA("BasePart") then return end
+        local camera=Workspace.CurrentCamera
+        if camera and (inst.Position-camera.CFrame.Position).Magnitude<self.nearbyRadius+35 then
+            self:Queue(inst)
+        end
     end))
     table.insert(self.connections, Workspace.DescendantRemoving:Connect(function(inst)
         if inst:IsA("BasePart") and self.parts[inst] then self:RestorePart(inst) end
@@ -316,7 +326,7 @@ function Controller.new(settings: any): any
         self:Schedule()
     end))
     table.insert(self.connections, CollectionService:GetInstanceAddedSignal("UVS_Glossy"):Connect(function(inst)
-        if inst:IsA("BasePart") then self:Queue(inst) end
+        if inst:IsA("BasePart") and self.active then self:Queue(inst) end
     end))
     table.insert(self.connections, CollectionService:GetInstanceAddedSignal("UVS_Exclude"):Connect(function(inst)
         if inst:IsA("BasePart") then self:RestorePart(inst) end
@@ -348,7 +358,14 @@ function Controller.new(settings: any): any
             end
         end
     end)
-    self:Schedule()
+    -- One near-camera query at startup; do not wait for a complete map scan.
+    self:Schedule(0)
+    task.spawn(function()
+        while self.alive do
+            task.wait(.35)
+            if self.active and not self.comparing then self:RefreshNearby(false) end
+        end
+    end)
     return self
 end
 
@@ -361,7 +378,7 @@ function Controller:Metrics(): any
     return {fps=self.fps, preset=self.state.preset, effective=effective(self),
         finish=self.state.finish, replaced=self.replacedCount, failures=self.materialFailures,
         reflectActive=self.reflectActive, reflectFailures=self.reflectFailures,
-        scanBusy=self.scanBusy or self.pumping,scanCount=self.scanCount,scanQueued=self.scanQueued,
+        scanBusy=self.pumping,scanCount=self.nearbyCount,scanQueued=self.scanQueued,
         skippedTextures=self.skippedTextures,effects=n, parts=self.trackedCount, comparing=self.comparing, photo=self.photo, testing=self.testing,
         clock=Lighting.ClockTime, exposure=Lighting.ExposureCompensation,
         colorActive=(self.effects.Color~=nil and self.effects.Color.Enabled==true),
@@ -519,6 +536,7 @@ function Controller:RestoreParts()
     self.surfaceKey="";self.glossSliderKey="";self.replacedCount=0
     self.reflectActive=0
     self.refreshGeneration+=1
+    self.nearbyProcessed=setmetatable({}, {__mode="k"})
 end
 function Controller:RestoreLamps()
     for light, original in pairs(self.lamps) do
@@ -576,38 +594,47 @@ function Controller:Queue(part: BasePart)
         self.pumping=false
     end)
 end
-function Controller:ScanParts()
-    self.scanVersion+=1
-    local version=self.scanVersion
-    self.scanCount=0;self.scanQueued=0;self.scanBatchCount=0
-    self.skippedTextures=0;self.scanBusy=true
-    task.spawn(function()
-        -- Progressive breadth-first walk: no single giant GetDescendants allocation.
-        local list: {[number]: Instance}={[1]=Workspace}
-        local head,tail=1,1
-        while head<=tail and self.alive and version==self.scanVersion do
-            local node=list[head]
-            list[head]=nil
-            head+=1
-            if not node then continue end
-            for _,child in ipairs(node:GetChildren()) do
-                if not self.alive or version~=self.scanVersion then return end
-                self.scanCount+=1
-                if child:IsA("BasePart") then self:Queue(child) end
-                if #child:GetChildren()>0 then
-                    tail+=1;list[tail]=child
-                end
-                if self.scanCount%100==0 then
-                    self:Notify()
-                    task.wait(.008+self.state.sliders.BatchPace*.022)
-                end
+function Controller:RefreshNearby(force: boolean?)
+    if not self.alive or not self.active or self.comparing then return end
+    local camera=Workspace.CurrentCamera
+    if not camera then return end
+    local point=camera.CFrame.Position+camera.CFrame.LookVector*24
+    local last=self.lastNearbyPosition
+    local now=os.clock()
+    -- Moving the camera updates nearby surfaces; idle camera gets a
+    -- small periodic refresh for streaming and newly spawned objects.
+    if not force and last and (point-last).Magnitude<4 and now-self.lastNearbyTime<1.15 then
+        return
+    end
+    self.lastNearbyPosition=point
+    self.lastNearbyTime=now
+    local params=OverlapParams.new()
+    params.FilterType=Enum.RaycastFilterType.Exclude
+    params.MaxParts=self.nearbyMaxParts
+    if self.probeFolder then params.FilterDescendantsInstances={self.probeFolder} end
+    local ok,parts=pcall(function()
+        return Workspace:GetPartBoundsInRadius(point,self.nearbyRadius,params)
+    end)
+    if not ok or not parts then
+        -- No unsafe full-Workspace fallback in restricted clients.
+        self.scanBusy=false
+        return
+    end
+    self.scanBusy=false
+    self.nearbyCount=#parts
+    self.scanCount=#parts
+    self.scanQueued=0
+    for i,part in ipairs(parts) do
+        if not self.alive or not self.active then break end
+        if part:IsA("BasePart") then
+            if force or not self.nearbyProcessed[part] then
+                self.nearbyProcessed[part]=true
+                if i<=90 then self:UpdatePart(part)
+                else self:Queue(part) end
             end
         end
-        if self.alive and version==self.scanVersion then
-            self.scanBusy=false
-            self:Notify()
-        end
-    end)
+    end
+    self:Notify()
 end
 function Controller:UpdatePart(part: BasePart)
     if not self.active or not part:IsDescendantOf(Workspace) then return end
@@ -780,7 +807,9 @@ function Controller:SurfaceRefresh()
     if key~=self.surfaceKey then
         self.surfaceKey=key
         self.glossSliderKey=sliders
-        self:ScanParts()
+        self.nearbyProcessed=setmetatable({}, {__mode="k"})
+        self:RefreshNearby(true)
+        self:RefreshTrackedParts()
     elseif sliders~=self.glossSliderKey then
         self.glossSliderKey=sliders
         self:RefreshTrackedParts()
