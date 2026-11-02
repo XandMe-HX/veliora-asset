@@ -1148,18 +1148,46 @@ local function button(parent: Instance, content: string): TextButton
     return b
 end
 
-local launcher=button(ui,"VISUALS  |  F3")
-launcher.AnchorPoint=Vector2.new(1,0)
-launcher.Position=UDim2.new(1,-12,0,12)
-launcher.Size=UDim2.fromOffset(142,39)
+local launcher=button(ui,"")
+launcher.Name="VisualsLauncher"
+launcher.AnchorPoint=Vector2.new(0,0)
+launcher.Position=UDim2.new(1,-65,0,150)
+launcher.Size=UDim2.fromOffset(49,49)
+launcher.Text=""
+launcher.ZIndex=10
+launcher.Active=true
+launcher.Selectable=true
+launcher:SetAttribute("Tooltip","Visual Settings • F3 • drag to move")
+local launcherCorner=launcher:FindFirstChildOfClass("UICorner")
+if launcherCorner then launcherCorner.CornerRadius=UDim.new(1,0) end
+-- Three equal strokes and off-center knobs form a crisp slider icon.
+for index=1,3 do
+    local line=Instance.new("Frame")
+    line.Name="Stroke"..index
+    line.Size=UDim2.fromOffset(24,2)
+    line.Position=UDim2.fromOffset(12,13+(index-1)*10)
+    line.BackgroundColor3=Color3.fromRGB(225,235,248)
+    line.BorderSizePixel=0
+    line.Parent=launcher
+    local knob=Instance.new("Frame")
+    knob.Name="Knob"..index
+    knob.Size=UDim2.fromOffset(6,6)
+    knob.Position=UDim2.fromOffset((if index==2 then 26 else if index==1 then 18 else 31),11+(index-1)*10)
+    knob.BackgroundColor3=Color3.fromRGB(108,185,230)
+    knob.BorderSizePixel=0
+    knob.Parent=launcher
+    local knobCorner=Instance.new("UICorner")
+    knobCorner.CornerRadius=UDim.new(1,0)
+    knobCorner.Parent=knob
+end
 launcher.BackgroundColor3=Color3.fromRGB(26,33,46)
 launcher.BackgroundTransparency=.16
 border(launcher)
 -- Solid launcher: restrained, no gradient.
 local panel=Instance.new("Frame")
 panel.Name="SettingsPanel"
-panel.AnchorPoint=Vector2.new(.5,.5)
-panel.Position=UDim2.fromScale(.5,.5)
+panel.AnchorPoint=Vector2.new(0,0)
+panel.Position=UDim2.new(1,-409,.5,-285)
 panel.Size=UDim2.fromOffset(388,570)
 panel.BackgroundColor3=Color3.fromRGB(20,25,35)
 panel.BackgroundTransparency=.05
@@ -1192,9 +1220,21 @@ local subtitle=text(panel,"Cinematic | texture-safe | no fake SSR / DLSS",11)
 subtitle.Position=UDim2.fromOffset(16,36)
 subtitle.Size=UDim2.new(1,-80,0,22)
 subtitle.TextColor3=Color3.fromRGB(165,178,197)
-local close=button(panel,"X")
+local close=button(panel,"×")
+close.Name="ClosePanel"
 close.Size=UDim2.fromOffset(33,31)
 close.Position=UDim2.new(1,-44,0,14)
+close.ZIndex=6
+local dragHeader=Instance.new("TextButton")
+dragHeader.Name="DragPanelHeader"
+dragHeader.Position=UDim2.fromOffset(0,0)
+dragHeader.Size=UDim2.new(1,-66,0,59)
+dragHeader.Text=""
+dragHeader.BackgroundTransparency=1
+dragHeader.ZIndex=5
+dragHeader.AutoButtonColor=false
+dragHeader.Selectable=false
+dragHeader.Parent=panel
 
 local tabs={"LOOKS","SHADOW","WATER","FOG","SYSTEM"}
 local tabButtons={}
@@ -1496,7 +1536,83 @@ local function setOpen(value: boolean)
         end)
     end
 end
-launcher.Activated:Connect(function() setOpen(not open) end)
+-- Independent drags: the launcher can be moved anywhere, and the
+-- panel header moves the window. Slider hit zones keep their own pointers.
+local launcherDrag: any=nil
+local panelDrag: any=nil
+local movedPanel=false
+local function viewportBounds(): Vector2
+    local camera=Workspace.CurrentCamera
+    return if camera then camera.ViewportSize else Vector2.new(1280,720)
+end
+local function keepOnScreen(obj: GuiObject, position: Vector2): Vector2
+    local bounds=viewportBounds()
+    local size=obj.AbsoluteSize
+    return Vector2.new(
+        math.clamp(position.X,4,math.max(4,bounds.X-size.X-4)),
+        math.clamp(position.Y,4,math.max(4,bounds.Y-size.Y-4))
+    )
+end
+local function beginMove(obj: GuiObject, input: InputObject): any
+    if input.UserInputType~=Enum.UserInputType.MouseButton1
+        and input.UserInputType~=Enum.UserInputType.Touch then return nil end
+    return {
+        input=input,touch=input.UserInputType==Enum.UserInputType.Touch,
+        pointer=Vector2.new(input.Position.X,input.Position.Y),
+        origin=obj.AbsolutePosition,moved=false
+    }
+end
+launcher.InputBegan:Connect(function(input)
+    if not launcherDrag and not panelDrag and not activeDrag then
+        launcherDrag=beginMove(launcher,input)
+    end
+end)
+dragHeader.InputBegan:Connect(function(input)
+    if not launcherDrag and not panelDrag and not activeDrag then
+        panelDrag=beginMove(panel,input)
+    end
+end)
+table.insert(connections,UIS.InputChanged:Connect(function(input)
+    local function matching(d: any): boolean
+        return d~=nil and (
+            (d.touch and input.UserInputType==Enum.UserInputType.Touch and input==d.input)
+            or (not d.touch and input.UserInputType==Enum.UserInputType.MouseMovement))
+    end
+    if matching(launcherDrag) then
+        local point=Vector2.new(input.Position.X,input.Position.Y)
+        local delta=point-launcherDrag.pointer
+        if delta.Magnitude>7 then launcherDrag.moved=true end
+        launcher.Position=UDim2.fromOffset(
+            keepOnScreen(launcher,launcherDrag.origin+delta).X,
+            keepOnScreen(launcher,launcherDrag.origin+delta).Y
+        )
+    elseif matching(panelDrag) then
+        local point=Vector2.new(input.Position.X,input.Position.Y)
+        local delta=point-panelDrag.pointer
+        if delta.Magnitude>6 then panelDrag.moved=true end
+        local p=keepOnScreen(panel,panelDrag.origin+delta)
+        panel.Position=UDim2.fromOffset(p.X,p.Y)
+        movedPanel=true
+    end
+end))
+table.insert(connections,UIS.InputEnded:Connect(function(input)
+    if launcherDrag and ((launcherDrag.touch and input==launcherDrag.input)
+        or (not launcherDrag.touch and input.UserInputType==Enum.UserInputType.MouseButton1)) then
+        local dragged=launcherDrag.moved
+        launcherDrag=nil
+        if not dragged then setOpen(not open) end
+    end
+    if panelDrag and ((panelDrag.touch and input==panelDrag.input)
+        or (not panelDrag.touch and input.UserInputType==Enum.UserInputType.MouseButton1)) then
+        panelDrag=nil
+    end
+end))
+launcher.Activated:Connect(function()
+    local last=UIS:GetLastInputType()
+    if last==Enum.UserInputType.Keyboard or last==Enum.UserInputType.Gamepad1 then
+        setOpen(not open)
+    end
+end)
 close.Activated:Connect(function() setOpen(false) end)
 
 local function showTab(group: string)
@@ -1534,9 +1650,9 @@ local function render()
         end
     end
     compare.Text=if metric.comparing then "AFTER  |  Restore enhanced visuals" else "BEFORE  |  Compare original visuals"
-    status.Text=string.format("FPS %d | %s | FX %d | Ref props %d/%d\n%s %d | Camera %s | Specular %.2f",metric.fps,metric.preset,
+    status.Text=string.format("FPS %d | %s | FX %d | Ref props %d/%d\nNearby %d | Camera %s | Specular %.2f",metric.fps,metric.preset,
         metric.effects,metric.reflectActive,metric.parts,
-        (if metric.scanBusy then "SCANNING" else "READY"),metric.scanCount,
+        metric.scanCount,
         (if metric.cameraEffect then "OK" else "OFF"),game:GetService("Lighting").EnvironmentSpecularScale)
 end
 
@@ -1584,6 +1700,19 @@ local function viewport()
     if not camera then return end
     local size=camera.ViewportSize
     scale.Scale=math.clamp(math.min(size.X/425,size.Y/630),.76,1)
+    if not movedPanel then
+        local windowWidth=388*scale.Scale
+        local windowHeight=570*scale.Scale
+        panel.Position=UDim2.fromOffset(
+            math.max(4,size.X-windowWidth-16),
+            math.max(4,(size.Y-windowHeight)*.5)
+        )
+    else
+        local safe=keepOnScreen(panel,panel.AbsolutePosition)
+        panel.Position=UDim2.fromOffset(safe.X,safe.Y)
+    end
+    local lp=keepOnScreen(launcher,launcher.AbsolutePosition)
+    launcher.Position=UDim2.fromOffset(lp.X,lp.Y)
 end
 local function cameraChanged()
     if viewportConn then viewportConn:Disconnect(); viewportConn=nil end
@@ -1603,6 +1732,8 @@ local function cleanup()
     disposed=true
     if viewportConn then viewportConn:Disconnect() end
     activeDrag=nil
+    launcherDrag=nil
+    panelDrag=nil
     scroll.ScrollingEnabled=true
     for _,connection in ipairs(connections) do connection:Disconnect() end
     table.clear(connections)
@@ -1613,7 +1744,7 @@ end
 shutdown.OnInvoke=cleanup
 render()
 -- The UVS_Shutdown BindableFunction handles re-execution cleanup.
-print("[UVS v6.2] Loaded | preset:",graphics:GetState().preset,"mode:",graphics:GetState().mode,"finish:",graphics:GetState().finish)
-print("[UVS v6.2] F3 / VISUALS. All finishes preserve texture maps; real SSR is unavailable.")
+print("[UVS v6.3] Loaded | preset:",graphics:GetState().preset,"mode:",graphics:GetState().mode,"finish:",graphics:GetState().finish)
+print("[UVS v6.3] F3 / VISUALS. All finishes preserve texture maps; real SSR is unavailable.")
 
 end
