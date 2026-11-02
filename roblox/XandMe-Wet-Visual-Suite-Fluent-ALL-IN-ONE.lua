@@ -155,7 +155,7 @@ local function applySnapshot(data)
         if type(current)=="number" and type(value)=="number" and value==value then
             local bounds=FIELD_RANGES[key]
             if bounds then
-                S[key]=clamp(value,bounds[1],bounds[2])
+                S[key]=math.clamp(value,bounds[1],bounds[2])
             end
         elseif type(current)=="boolean" and type(value)=="boolean" then
             S[key]=value
@@ -186,7 +186,7 @@ local function importSaved(container)
         end
     end
     local current=tonumber(container.selectedSlot)
-    if current then selectedSlot=clamp(math.floor(current),1,3)end
+    if current then selectedSlot=math.clamp(math.floor(current),1,3)end
     if container.autoLoad~=false then
         local active=savedSlots[tostring(selectedSlot)]
         if active then applySnapshot(active.data);selectedName=active.name end
