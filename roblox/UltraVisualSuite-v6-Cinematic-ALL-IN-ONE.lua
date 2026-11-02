@@ -661,11 +661,14 @@ function Controller:UpdatePart(part: BasePart)
     -- Never write Material, Color, Transparency, TextureID, SurfaceAppearance or physics.
     local desired=math.max(old.reflectance,target)
     local enhanced=(desired-old.reflectance)>.004
-    if enhanced~=old.activeReflect then
-        self.reflectActive+=if enhanced then 1 else -1
-        old.activeReflect=enhanced
+    local wrote=put(part,"Reflectance",desired)
+    local confirmed=wrote and math.abs(part.Reflectance-desired)<.001
+    if enhanced and not confirmed then self.reflectFailures+=1 end
+    local active=enhanced and confirmed
+    if active~=old.activeReflect then
+        self.reflectActive+=if active then 1 else -1
+        old.activeReflect=active
     end
-    if not put(part,"Reflectance",desired) then self.reflectFailures+=1 end
     -- Opt-in only: Studio-authored material variants on explicitly tagged parts.
     if f.PBRVariants and CollectionService:HasTag(part,"UVS_PBR")
         and not textured and old.variant=="" then
@@ -1312,6 +1315,11 @@ for _,name in ipairs(Config.SliderOrder) do
 end
 
 heading("TOOLS")
+local rendererNote=text(scroll,"REF counts successful property changes, not real SSR. Roblox may ignore reflections for certain materials. Studio PBR maps must exist beforehand.",11)
+rendererNote.Size=UDim2.new(1,-3,0,55)
+rendererNote.TextColor3=Color3.fromRGB(159,176,193)
+rendererNote.LayoutOrder=nextOrder()
+tagTab(rendererNote)
 local adaptive=button(scroll,"Adaptive: ON")
 adaptive.LayoutOrder=nextOrder()
 tagTab(adaptive)
