@@ -2,7 +2,7 @@
 -- Visual assistance for Stud Archers (Roblox)
 -- The game may use custom 2D actors, not regular Humanoid characters.
 -- No remote firing, damage editing, or reward manipulation.
--- Version: 2026-11-08
+-- Version: 2026-11-08 | V2.1 trajectory hotfix
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -22,9 +22,9 @@ for _,name in ipairs({"VelionArchersV1", "VelionArchersV2"}) do
 end
 
 local s = {
-    alive=true, esp=true, tracer=true, trajectory=true, prediction=true,
+    alive=true, esp=true, tracer=false, trajectory=true, prediction=true,
     marker=true, warning=true, performance=true, lock=false, pick=false,
-    aimPart="Head", detection=2200, arrowSpeed=280, lineLength=2,
+    aimPart="Head", detection=2200, arrowSpeed=280, lineLength=1,
     minimized=false, target=nil, targetData=nil, count=0, message="Scanning..."
 }
 local theme = {
@@ -216,7 +216,7 @@ toggle(tabs.Visual,"TARGET TRACER","tracer",47)
 toggle(tabs.Visual,"LONG ARROW TRAJECTORY","trajectory",86)
 toggle(tabs.Visual,"HEAD / BODY / LEG MARKER","marker",125)
 toggle(tabs.Visual,"PROJECTILE ALERT","warning",164)
-slider(tabs.Visual,"TRAJECTORY LENGTH","lineLength",212,1,4,.5,"x")
+slider(tabs.Visual,"TRAJECTORY ARC HEIGHT","lineLength",212,.25,2.5,.25,"x")
 
 local radarLabel=label(tabs.Radar,"No match detected.",12,13,269,246,12)
 radarLabel.TextColor3=theme.white
@@ -225,7 +225,7 @@ slider(tabs.Settings,"DETECTION DISTANCE","detection",63,100,5000,100," studs")
 slider(tabs.Settings,"ESTIMATED ARROW SPEED","arrowSpeed",133,50,1000,25,"")
 label(tabs.Settings,"No stage/level cap is used.\n"
     .."ESP searches Workspace active models.\n"
-    .."Projectile line is an estimate.\n"
+    .."Arc finishes at target (visual estimate).\n"
     .."No server-side hit or damage changes.",12,201,268,88,11)
 
 -- Runtime actors are not necessarily Humanoids.
@@ -461,46 +461,62 @@ local function redraw()
     if not cam then return end
     local d=s.targetData
     for _,seg in ipairs(lines) do seg.Visible=false end
-    mark.Visible=false;trace.Visible=false
+    mark.Visible=false
+    trace.Visible=false
     if not d or not d.model.Parent then
-        radar.Text="NO TARGET | PICK NPC";return
+        radar.Text="NO TARGET | PICK NPC"
+        return
     end
-    radar.Text=("TARGET: "..d.model.Name.." | "..s.aimPart.." | "
-        ..math.floor(d.distance).." studs")
-    local p=d.point
+
+    radar.Text="TARGET: "..d.model.Name.." | "..s.aimPart.." | "
+        ..math.floor(d.distance).." studs"
+
     local origin,root=referencePosition()
-    if s.prediction then
-        local vel=d.part.AssemblyLinearVelocity
-        local travel=math.clamp(d.distance/math.max(1,s.arrowSpeed),0,2.5)
-        p=p+vel*travel
+    local aimPoint=d.point
+    if s.prediction and d.part then
+        local velocity=d.part.AssemblyLinearVelocity
+        local travelTime=math.clamp(
+            d.distance/math.max(s.arrowSpeed,1),0,2.5
+        )
+        aimPoint=aimPoint+velocity*travelTime
     end
-    local goal,visible=screenPoint(cam,p)
-    if not visible then return end
+
+    local goal,onScreen=screenPoint(cam,aimPoint)
+    if not onScreen then return end
     mark.Visible=s.marker
     mark.Position=UDim2.fromOffset(goal.X,goal.Y)
+
     local vp=cam.ViewportSize
-    local from
-    if root then
-        local xy,onscreen=screenPoint(cam,root.Position)
-        from=onscreen and xy or Vector2.new(vp.X*.2,vp.Y*.7)
-    else
-        -- Camera-origin fallback for fixed-camera 2D duels.
-        from=Vector2.new(vp.X*.20,vp.Y*.70)
+    local from=Vector2.new(vp.X*.18,vp.Y*.70)
+    if root and root.Parent then
+        -- Approximate bow/hand height; do not use feet as launch point.
+        local launch=root.Position+Vector3.new(0,2.2,0)
+        local projected,valid=screenPoint(cam,launch)
+        if valid then from=projected end
     end
-    if s.tracer then trace.Visible=true;lineBetween(trace,from,goal) end
+
+    -- Only one path is rendered. The previous V2 drew two crossing lines
+    -- and multiplied the destination, extending beyond the target.
     if s.trajectory then
         local delta=goal-from
-        local extended=from+delta*s.lineLength
-        local arc=math.clamp(math.abs(delta.X)*.12,6,90)
+        local arcHeight=math.clamp(delta.Magnitude*.07,18,95)
+            *s.lineLength
         local previous=from
         for i,seg in ipairs(lines) do
             local t=i/#lines
-            local endPoint=from+(extended-from)*t
-                -Vector2.new(0,4*arc*t*(1-t))
-            lineBetween(seg,previous,endPoint)
+            -- Screen-space parabolic guide. Ends exactly on the selected
+            -- body part, NOT beyond the enemy. Visual estimate only;
+            -- the real game's ballistic coefficients are not yet known.
+            local point=from+delta*t
+                -Vector2.new(0,4*arcHeight*t*(1-t))
+            lineBetween(seg,previous,point)
             seg.Visible=true
-            previous=endPoint
+            previous=point
         end
+    elseif s.tracer then
+        -- Straight tracer is only used when the curved path is OFF.
+        trace.Visible=true
+        lineBetween(trace,from,goal)
     end
 end
 
