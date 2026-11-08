@@ -2,7 +2,7 @@
 -- Visual assistance for Stud Archers (Roblox)
 -- The game may use custom 2D actors, not regular Humanoid characters.
 -- No remote firing, damage editing, or reward manipulation.
--- Version: 2026-11-08 | V2.1 trajectory hotfix
+-- Version: 2026-11-08 | V2.2 live aim-preview, no fabricated trajectory
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -22,7 +22,7 @@ for _,name in ipairs({"VelionArchersV1", "VelionArchersV2"}) do
 end
 
 local s = {
-    alive=true, esp=true, tracer=false, trajectory=true, prediction=true,
+    alive=true, esp=true, tracer=false, trajectory=false, prediction=false,
     marker=true, warning=true, performance=true, lock=false, pick=false,
     aimPart="Head", detection=2200, arrowSpeed=280, lineLength=1,
     minimized=false, target=nil, targetData=nil, count=0, message="Scanning..."
@@ -91,7 +91,7 @@ inst("UIStroke",panel,{Color=theme.purple,Thickness=1.2})
 local header=inst("Frame",panel,{
     Size=UDim2.new(1,0,0,42),BackgroundTransparency=1,Active=true
 })
-local heading=label(header,"VELION | STUD ARCHERS V2",11,8,325,26,14)
+local heading=label(header,"VELION | STUD ARCHERS V2.2",11,8,325,26,14)
 heading.Font=Enum.Font.GothamBold
 local mini=button(header,"-",350,8,25,24)
 local close=button(header,"X",381,8,25,24)
@@ -178,7 +178,7 @@ local function slider(page,name,key,y,minV,maxV,step,suffix)
 end
 
 toggle(tabs.Combat,"TARGET LOCK (VISUAL)","lock",10)
-toggle(tabs.Combat,"TARGET PREDICTION","prediction",49)
+toggle(tabs.Combat,"TARGET MOTION LEAD (EST.)","prediction",49)
 local partBtns={}
 label(tabs.Combat,"TARGET BODY PART",12,90,210,20,11)
 for i,name in ipairs({"Head","Body","Legs"}) do
@@ -209,14 +209,14 @@ nextTarget.MouseButton1Click:Connect(function()
     refreshControls.lock()
 end)
 label(tabs.Combat,"Q = Lock  |  N = Next Target\n"
-    .."Target Lock marks the aim point; it does not fire.",12,242,268,49,10)
+    .."Hold left-click to aim with GAME preview.\nUse the green marker for Head/Body/Legs.",12,242,268,49,10)
 
 toggle(tabs.Visual,"ENEMY ESP","esp",8)
-toggle(tabs.Visual,"TARGET TRACER","tracer",47)
-toggle(tabs.Visual,"LONG ARROW TRAJECTORY","trajectory",86)
+toggle(tabs.Visual,"TARGET DIRECTION (NOT PATH)","tracer",47)
+toggle(tabs.Visual,"SHOW GAME AIMARROW MARKERS","trajectory",86)
 toggle(tabs.Visual,"HEAD / BODY / LEG MARKER","marker",125)
 toggle(tabs.Visual,"PROJECTILE ALERT","warning",164)
-slider(tabs.Visual,"TRAJECTORY ARC HEIGHT","lineLength",212,.25,2.5,.25,"x")
+slider(tabs.Visual,"MARKER SIZE","lineLength",212,.5,2.5,.25,"x")
 
 local radarLabel=label(tabs.Radar,"No match detected.",12,13,269,246,12)
 radarLabel.TextColor3=theme.white
@@ -225,7 +225,7 @@ slider(tabs.Settings,"DETECTION DISTANCE","detection",63,100,5000,100," studs")
 slider(tabs.Settings,"ESTIMATED ARROW SPEED","arrowSpeed",133,50,1000,25,"")
 label(tabs.Settings,"No stage/level cap is used.\n"
     .."ESP searches Workspace active models.\n"
-    .."Arc finishes at target (visual estimate).\n"
+    .."Hold LMB; no invented shot trajectory.\n"
     .."No server-side hit or damage changes.",12,201,268,88,11)
 
 -- Runtime actors are not necessarily Humanoids.
@@ -412,29 +412,42 @@ local function scan()
     end
 end
 
--- Long 2D overlay: approximate projected trajectory, not the actual server ballistic function.
+-- V2.2: Do NOT invent a parabola between player and enemy.
+-- The game is hold-to-aim / release-to-fire.
+-- AimArrow objects, if present, are shown only at their true world positions.
 local lines={}
-for i=1,32 do
-    lines[i]=inst("Frame",gui,{
+for i=1,24 do
+    local dot=inst("Frame",gui,{
         AnchorPoint=Vector2.new(.5,.5),
-        BackgroundColor3=theme.purple,BorderSizePixel=0,Visible=false,
-        Size=UDim2.fromOffset(1,2)
+        BackgroundColor3=Color3.fromRGB(255,207,86),
+        BorderSizePixel=0,
+        Visible=false,
+        Size=UDim2.fromOffset(5,5)
     })
+    rounded(dot,6)
+    lines[i]=dot
 end
+
 local mark=inst("Frame",gui,{
     AnchorPoint=Vector2.new(.5,.5),
-    Size=UDim2.fromOffset(14,14),
+    Size=UDim2.fromOffset(20,20),
     BorderSizePixel=0,BackgroundTransparency=1,Visible=false
 })
-rounded(mark,8)
-inst("UIStroke",mark,{Color=theme.green,Thickness=2.2})
+rounded(mark,10)
+inst("UIStroke",mark,{Color=theme.green,Thickness=2.5})
 local trace=inst("Frame",gui,{
     AnchorPoint=Vector2.new(.5,.5),
     BackgroundColor3=theme.red,BorderSizePixel=0,Visible=false
 })
-local radar=label(gui,"NO TARGET",18,130,370,46,12)
+local radar=label(gui,"NO TARGET",18,130,470,46,12)
 radar.Font=Enum.Font.GothamBold
 radar.TextStrokeTransparency=.3
+
+local aimStatus=label(gui,"",18,171,550,40,11)
+aimStatus.Font=Enum.Font.GothamBold
+aimStatus.TextColor3=Color3.fromRGB(255,207,86)
+aimStatus.TextStrokeTransparency=.3
+
 local warn=label(gui,"",0,0,500,35,15)
 warn.AnchorPoint=Vector2.new(.5,0)
 warn.Position=UDim2.new(.5,0,0,115)
@@ -456,68 +469,124 @@ local function screenPoint(cam,v)
     return Vector2.new(point.X,point.Y),visible and point.Z>0
 end
 
+local activeAimParts={}
+local function refreshNativeMarkers()
+    table.clear(activeAimParts)
+    local root=workspace:FindFirstChild("StudArchersLocal")
+    if not root then return end
+    local inspected=0
+    for _,obj in ipairs(root:GetDescendants()) do
+        inspected+=1
+        if inspected>3500 or #activeAimParts>=96 then break end
+        if obj:IsA("BasePart") and obj.Name=="AimArrow" then
+            table.insert(activeAimParts,obj)
+        end
+    end
+end
+
+task.spawn(function()
+    while s.alive and gui.Parent do
+        pcall(refreshNativeMarkers)
+        task.wait(s.performance and 1.2 or .55)
+    end
+end)
+
 local function redraw()
     local cam=workspace.CurrentCamera
     if not cam then return end
-    local d=s.targetData
-    for _,seg in ipairs(lines) do seg.Visible=false end
+
+    local aiming=UIS:IsMouseButtonPressed(
+        Enum.UserInputType.MouseButton1
+    )
+    for _,dot in ipairs(lines) do dot.Visible=false end
     mark.Visible=false
     trace.Visible=false
+
+    local d=s.targetData
     if not d or not d.model.Parent then
         radar.Text="NO TARGET | PICK NPC"
+        aimStatus.Text="No enemy model detected"
         return
     end
 
-    radar.Text="TARGET: "..d.model.Name.." | "..s.aimPart.." | "
-        ..math.floor(d.distance).." studs"
+    radar.Text="TARGET: "..d.model.Name.." | "..s.aimPart
+        .." | "..math.floor(d.distance).." studs"
 
-    local origin,root=referencePosition()
-    local aimPoint=d.point
+    -- Selected target part. This is NOT where a fired arrow
+    -- necessarily lands. The game's actual aim UI takes priority.
+    local targetPoint=d.point
     if s.prediction and d.part then
-        local velocity=d.part.AssemblyLinearVelocity
         local travelTime=math.clamp(
-            d.distance/math.max(s.arrowSpeed,1),0,2.5
+            d.distance/math.max(s.arrowSpeed,1),0,1.5
         )
-        aimPoint=aimPoint+velocity*travelTime
+        targetPoint=targetPoint+
+            d.part.AssemblyLinearVelocity*travelTime
     end
 
-    local goal,onScreen=screenPoint(cam,aimPoint)
-    if not onScreen then return end
-    mark.Visible=s.marker
-    mark.Position=UDim2.fromOffset(goal.X,goal.Y)
-
-    local vp=cam.ViewportSize
-    local from=Vector2.new(vp.X*.18,vp.Y*.70)
-    if root and root.Parent then
-        -- Approximate bow/hand height; do not use feet as launch point.
-        local launch=root.Position+Vector3.new(0,2.2,0)
-        local projected,valid=screenPoint(cam,launch)
-        if valid then from=projected end
+    local goal,visible=screenPoint(cam,targetPoint)
+    if not visible then
+        aimStatus.Text="Target outside camera view"
+        return
     end
 
-    -- Only one path is rendered. The previous V2 drew two crossing lines
-    -- and multiplied the destination, extending beyond the target.
-    if s.trajectory then
-        local delta=goal-from
-        local arcHeight=math.clamp(delta.Magnitude*.07,18,95)
-            *s.lineLength
-        local previous=from
-        for i,seg in ipairs(lines) do
-            local t=i/#lines
-            -- Screen-space parabolic guide. Ends exactly on the selected
-            -- body part, NOT beyond the enemy. Visual estimate only;
-            -- the real game's ballistic coefficients are not yet known.
-            local point=from+delta*t
-                -Vector2.new(0,4*arcHeight*t*(1-t))
-            lineBetween(seg,previous,point)
-            seg.Visible=true
-            previous=point
+    if s.marker then
+        mark.Size=UDim2.fromOffset(
+            20*s.lineLength,20*s.lineLength
+        )
+        mark.Position=UDim2.fromOffset(goal.X,goal.Y)
+        mark.Visible=true
+    end
+
+    local source,bodyPart=referencePosition()
+    if s.tracer and bodyPart and bodyPart.Parent then
+        local from,valid=screenPoint(cam,bodyPart.Position+
+            Vector3.new(0,2.5,0))
+        if valid then
+            trace.Visible=true
+            lineBetween(trace,from,goal)
         end
-    elseif s.tracer then
-        -- Straight tracer is only used when the curved path is OFF.
-        trace.Visible=true
-        lineBetween(trace,from,goal)
     end
+
+    if not aiming then
+        aimStatus.Text="HOLD LEFT CLICK -> adjust game's real aim -> RELEASE"
+        return
+    end
+
+    if not s.trajectory then
+        aimStatus.Text="AIMING | align game's preview with GREEN marker"
+        return
+    end
+
+    if #activeAimParts==0 then
+        aimStatus.Text="AIMING | no native AimArrow parts found"
+        return
+    end
+
+    -- These are observed model positions, NOT reconstructed ballistics.
+    -- Only markers within the active duel's plausible screen area are shown.
+    local viewport=cam.ViewportSize
+    local points={}
+    for _,part in ipairs(activeAimParts) do
+        if part.Parent then
+            local xy,inView=screenPoint(cam,part.Position)
+            if inView and xy.X>=0 and xy.X<=viewport.X
+                and xy.Y>=0 and xy.Y<=viewport.Y then
+                points[#points+1]=xy
+            end
+        end
+    end
+    table.sort(points,function(x,y)return x.X<y.X end)
+    for i=1,math.min(#points,#lines) do
+        local dot=lines[i]
+        dot.Size=UDim2.fromOffset(5*s.lineLength,5*s.lineLength)
+        dot.Position=UDim2.fromOffset(
+            points[i].X,points[i].Y
+        )
+        dot.Visible=true
+    end
+
+    aimStatus.Text="AIMING | "..math.min(#points,#lines)
+        .." observed AimArrow parts (NOT confirmed trajectory)"
 end
 
 local warnedUntil=0
@@ -655,4 +724,4 @@ end
 stop.Event:Connect(cleanup)
 close.MouseButton1Click:Connect(cleanup)
 print("[VELION STUD ARCHERS V2] Initialized")
-print("[V2] Head/Body/Legs, 5000-stud detection, long visual trajectory")
+print("[V2.2] Hold-to-aim guide. No fabricated purple arc.")
