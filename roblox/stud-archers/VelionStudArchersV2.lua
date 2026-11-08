@@ -2,7 +2,7 @@
 -- Visual assistance for Stud Archers (Roblox)
 -- The game may use custom 2D actors, not regular Humanoid characters.
 -- No remote firing, damage editing, or reward manipulation.
--- Version: 2026-11-08 | V2.2 live aim-preview, no fabricated trajectory
+-- Version: 2026-11-08 | V2.3 dynamic body-part reticle and clean hold-to-aim UI
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -91,7 +91,7 @@ inst("UIStroke",panel,{Color=theme.purple,Thickness=1.2})
 local header=inst("Frame",panel,{
     Size=UDim2.new(1,0,0,42),BackgroundTransparency=1,Active=true
 })
-local heading=label(header,"VELION | STUD ARCHERS V2.2",11,8,325,26,14)
+local heading=label(header,"VELION | STUD ARCHERS V2.3",11,8,325,26,14)
 heading.Font=Enum.Font.GothamBold
 local mini=button(header,"-",350,8,25,24)
 local close=button(header,"X",381,8,25,24)
@@ -212,11 +212,11 @@ label(tabs.Combat,"Q = Lock  |  N = Next Target\n"
     .."Hold left-click to aim with GAME preview.\nUse the green marker for Head/Body/Legs.",12,242,268,49,10)
 
 toggle(tabs.Visual,"ENEMY ESP","esp",8)
-toggle(tabs.Visual,"TARGET DIRECTION (NOT PATH)","tracer",47)
-toggle(tabs.Visual,"SHOW GAME AIMARROW MARKERS","trajectory",86)
+toggle(tabs.Visual,"STRAIGHT TARGET LINE","tracer",47)
+toggle(tabs.Visual,"AIMARROW DEBUG (OPTIONAL)","trajectory",86)
 toggle(tabs.Visual,"HEAD / BODY / LEG MARKER","marker",125)
 toggle(tabs.Visual,"PROJECTILE ALERT","warning",164)
-slider(tabs.Visual,"MARKER SIZE","lineLength",212,.5,2.5,.25,"x")
+slider(tabs.Visual,"TARGET MARKER SIZE","lineLength",212,.5,2.5,.25,"x")
 
 local radarLabel=label(tabs.Radar,"No match detected.",12,13,269,246,12)
 radarLabel.TextColor3=theme.white
@@ -225,7 +225,7 @@ slider(tabs.Settings,"DETECTION DISTANCE","detection",63,100,5000,100," studs")
 slider(tabs.Settings,"ESTIMATED ARROW SPEED","arrowSpeed",133,50,1000,25,"")
 label(tabs.Settings,"No stage/level cap is used.\n"
     .."ESP searches Workspace active models.\n"
-    .."Hold LMB; no invented shot trajectory.\n"
+    .."Precise body-part marker; no fake trajectory.\n"
     .."No server-side hit or damage changes.",12,201,268,88,11)
 
 -- Runtime actors are not necessarily Humanoids.
@@ -286,30 +286,41 @@ local function referencePosition()
 end
 
 local function aimPosition(model)
-    local head=model:FindFirstChild("Head",true)
-    local body=model:FindFirstChild("UpperTorso",true)
-        or model:FindFirstChild("Torso",true)
-        or model:FindFirstChild("HumanoidRootPart",true)
-    local leg=model:FindFirstChild("LeftFoot",true)
-        or model:FindFirstChild("LeftLowerLeg",true)
-        or model:FindFirstChild("Left Leg",true)
-        or model:FindFirstChild("RightFoot",true)
-        or model:FindFirstChild("Right Leg",true)
-    local chosen=(s.aimPart=="Head" and head)
-        or (s.aimPart=="Body" and body)
-        or (s.aimPart=="Legs" and leg)
-    local part=(chosen and chosen:IsA("BasePart") and chosen)
-        or (body and body:IsA("BasePart") and body)
-        or (head and head:IsA("BasePart") and head)
-        or model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart",true)
-    if not part then return nil,nil end
-    if chosen and chosen:IsA("BasePart") then return chosen.Position,part end
-    local ok,cf,size=pcall(function()return model:GetBoundingBox()end)
-    if ok then
-        local pct=s.aimPart=="Head" and .36 or s.aimPart=="Legs" and -.33 or 0
-        return cf.Position+Vector3.new(0,size.Y*pct,0),part
+    -- Always prefer actual avatar body parts; bows, accessories and props
+    -- must never define the selected head/torso/legs position.
+    local function named(...)
+        for _,n in ipairs({...}) do
+            local v=model:FindFirstChild(n,true)
+            if v and v:IsA("BasePart") then return v end
+        end
     end
-    return part.Position,part
+    local head=named("Head")
+    local torso=named("UpperTorso","Torso","LowerTorso")
+    local mid=named("HumanoidRootPart")
+    local legs={
+        named("LeftFoot","LeftLowerLeg","Left Leg"),
+        named("RightFoot","RightLowerLeg","Right Leg")
+    }
+    local selected
+    if s.aimPart=="Head" then
+        selected=head
+    elseif s.aimPart=="Body" then
+        selected=torso or mid
+    elseif s.aimPart=="Legs" then
+        selected=legs[1] or legs[2]
+    end
+    if selected then return selected.Position,selected end
+    if s.aimPart=="Legs" and legs[1] and legs[2] then
+        return (legs[1].Position+legs[2].Position)*.5,legs[1]
+    end
+    local base=torso or mid or head or model.PrimaryPart
+        or model:FindFirstChildWhichIsA("BasePart",true)
+    if not base then return nil,nil end
+    local height=math.clamp(base.Size.Y*2.5,2.5,6)
+    local offset=s.aimPart=="Head" and (height*.35)
+        or s.aimPart=="Legs" and (-height*.30)
+        or 0
+    return base.Position+Vector3.new(0,offset,0),base
 end
 local function getData(m,origin)
     if not m.Parent or not m:IsDescendantOf(workspace) or mapObject(m) then return nil end
@@ -434,7 +445,13 @@ local mark=inst("Frame",gui,{
     BorderSizePixel=0,BackgroundTransparency=1,Visible=false
 })
 rounded(mark,10)
-inst("UIStroke",mark,{Color=theme.green,Thickness=2.5})
+local markerStroke=inst("UIStroke",mark,{Color=theme.green,Thickness=2.5})
+local markerLabel=label(gui,"HEAD",0,0,88,19,11)
+markerLabel.AnchorPoint=Vector2.new(.5,.5)
+markerLabel.TextXAlignment=Enum.TextXAlignment.Center
+markerLabel.Font=Enum.Font.GothamBold
+markerLabel.TextStrokeTransparency=.25
+markerLabel.Visible=false
 local trace=inst("Frame",gui,{
     AnchorPoint=Vector2.new(.5,.5),
     BackgroundColor3=theme.red,BorderSizePixel=0,Visible=false
@@ -491,6 +508,9 @@ task.spawn(function()
     end
 end)
 
+local smoothPoint=nil
+local smoothTarget=nil
+
 local function redraw()
     local cam=workspace.CurrentCamera
     if not cam then return end
@@ -500,93 +520,123 @@ local function redraw()
     )
     for _,dot in ipairs(lines) do dot.Visible=false end
     mark.Visible=false
+    markerLabel.Visible=false
     trace.Visible=false
 
     local d=s.targetData
     if not d or not d.model.Parent then
+        smoothPoint=nil
+        smoothTarget=nil
         radar.Text="NO TARGET | PICK NPC"
-        aimStatus.Text="No enemy model detected"
+        aimStatus.Text="No active opponent model"
         return
     end
 
-    radar.Text="TARGET: "..d.model.Name.." | "..s.aimPart
+    -- Re-evaluate part on EVERY overlay update.
+    -- The old implementation reused the 0.85s scanner cache, so changing
+    -- Head -> Body -> Legs or tracking a moving enemy was visibly delayed.
+    local point,part=aimPosition(d.model)
+    if not point or not part then
+        aimStatus.Text="Selected enemy has no visible body parts"
+        return
+    end
+    d.part=part
+    d.point=point
+    local origin,root=referencePosition()
+    d.distance=(point-origin).Magnitude
+    radar.Text="TARGET: "..d.model.Name.." | "..string.upper(s.aimPart)
         .." | "..math.floor(d.distance).." studs"
 
-    -- Selected target part. This is NOT where a fired arrow
-    -- necessarily lands. The game's actual aim UI takes priority.
-    local targetPoint=d.point
-    if s.prediction and d.part then
+    -- Optional experimental motion lead is OFF by default.
+    -- It is NOT a computed impact position or validated ballistic solution.
+    if s.prediction then
         local travelTime=math.clamp(
-            d.distance/math.max(s.arrowSpeed,1),0,1.5
+            d.distance/math.max(s.arrowSpeed,1),0,1.2
         )
-        targetPoint=targetPoint+
-            d.part.AssemblyLinearVelocity*travelTime
+        point=point+part.AssemblyLinearVelocity*travelTime
     end
 
-    local goal,visible=screenPoint(cam,targetPoint)
+    local screenPoint2,visible=screenPoint(cam,point)
     if not visible then
-        aimStatus.Text="Target outside camera view"
+        markerLabel.Visible=false
+        smoothPoint=nil
+        aimStatus.Text="Target outside camera"
         return
     end
 
-    if s.marker then
-        mark.Size=UDim2.fromOffset(
-            20*s.lineLength,20*s.lineLength
+    if smoothTarget~=d.model then
+        smoothPoint=screenPoint2
+        smoothTarget=d.model
+    else
+        -- High responsiveness while drawing a bow.
+        smoothPoint=smoothPoint:Lerp(
+            screenPoint2,aiming and .95 or .82
         )
-        mark.Position=UDim2.fromOffset(goal.X,goal.Y)
-        mark.Visible=true
     end
 
-    local source,bodyPart=referencePosition()
-    if s.tracer and bodyPart and bodyPart.Parent then
-        local from,valid=screenPoint(cam,bodyPart.Position+
-            Vector3.new(0,2.5,0))
-        if valid then
+    local colors={
+        Head=theme.green,
+        Body=theme.purple,
+        Legs=Color3.fromRGB(252,195,84)
+    }
+    local accent=colors[s.aimPart] or theme.green
+    if s.marker then
+        local size=(aiming and 17 or 20)*s.lineLength
+        mark.Size=UDim2.fromOffset(size,size)
+        mark.Position=UDim2.fromOffset(
+            smoothPoint.X,smoothPoint.Y
+        )
+        markerStroke.Color=accent
+        markerStroke.Thickness=aiming and 2.8 or 2.0
+        mark.Visible=true
+
+        markerLabel.Text=string.upper(s.aimPart)
+        markerLabel.TextColor3=accent
+        markerLabel.Position=UDim2.fromOffset(
+            smoothPoint.X,smoothPoint.Y-24*s.lineLength
+        )
+        markerLabel.Visible=true
+    end
+
+    -- Straight line is optional, OFF by default. Do not present it
+    -- as a firing trajectory, impact prediction, or hit confirmation.
+    if s.tracer and root and root.Parent then
+        local startPos,onScreen=screenPoint(
+            cam,root.Position+Vector3.new(0,2.3,0)
+        )
+        if onScreen then
             trace.Visible=true
-            lineBetween(trace,from,goal)
+            lineBetween(trace,startPos,smoothPoint)
         end
     end
 
-    if not aiming then
-        aimStatus.Text="HOLD LEFT CLICK -> adjust game's real aim -> RELEASE"
-        return
-    end
-
-    if not s.trajectory then
-        aimStatus.Text="AIMING | align game's preview with GREEN marker"
-        return
-    end
-
-    if #activeAimParts==0 then
-        aimStatus.Text="AIMING | no native AimArrow parts found"
-        return
-    end
-
-    -- These are observed model positions, NOT reconstructed ballistics.
-    -- Only markers within the active duel's plausible screen area are shown.
-    local viewport=cam.ViewportSize
-    local points={}
-    for _,part in ipairs(activeAimParts) do
-        if part.Parent then
-            local xy,inView=screenPoint(cam,part.Position)
-            if inView and xy.X>=0 and xy.X<=viewport.X
-                and xy.Y>=0 and xy.Y<=viewport.Y then
-                points[#points+1]=xy
+    -- Native AimArrow debug: show only a few real objects CLOSE TO
+    -- the shooter's world position, never the 24 scattered markers.
+    if aiming and s.trajectory and #activeAimParts>0 then
+        local spots={}
+        for _,p in ipairs(activeAimParts) do
+            if p.Parent and (p.Position-origin).Magnitude<22 then
+                local xy,inView=screenPoint(cam,p.Position)
+                if inView then spots[#spots+1]=xy end
             end
         end
-    end
-    table.sort(points,function(x,y)return x.X<y.X end)
-    for i=1,math.min(#points,#lines) do
-        local dot=lines[i]
-        dot.Size=UDim2.fromOffset(5*s.lineLength,5*s.lineLength)
-        dot.Position=UDim2.fromOffset(
-            points[i].X,points[i].Y
-        )
-        dot.Visible=true
+        table.sort(spots,function(a,b) return a.X<b.X end)
+        for i=1,math.min(#spots,6,#lines) do
+            local dot=lines[i]
+            dot.Size=UDim2.fromOffset(4,4)
+            dot.Position=UDim2.fromOffset(
+                spots[i].X,spots[i].Y
+            )
+            dot.Visible=true
+        end
     end
 
-    aimStatus.Text="AIMING | "..math.min(#points,#lines)
-        .." observed AimArrow parts (NOT confirmed trajectory)"
+    if aiming then
+        aimStatus.Text="AIMING: "..string.upper(s.aimPart)
+            .." | follow the GAME'S own arrow guide"
+    else
+        aimStatus.Text="HOLD LEFT CLICK to aim | release to shoot"
+    end
 end
 
 local warnedUntil=0
@@ -622,7 +672,7 @@ local renderAccum=0
 conn(RunService.RenderStepped,function(dt)
     if not s.alive then return end
     renderAccum+=dt
-    if renderAccum<(s.performance and .085 or .04) then return end
+    if renderAccum<(UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) and .04 or (s.performance and .075 or .03)) then return end
     renderAccum=0
     local ok,err=pcall(redraw)
     if not ok then s.message="Render error: "..tostring(err):sub(1,50) end
@@ -724,4 +774,4 @@ end
 stop.Event:Connect(cleanup)
 close.MouseButton1Click:Connect(cleanup)
 print("[VELION STUD ARCHERS V2] Initialized")
-print("[V2.2] Hold-to-aim guide. No fabricated purple arc.")
+print("[V2.3] Dynamic Head/Body/Legs markers. Native aim owns trajectory.")
