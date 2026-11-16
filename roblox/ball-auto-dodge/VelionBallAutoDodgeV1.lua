@@ -1,6 +1,7 @@
--- VELION BALL DODGE V1.0
+-- VELION BALL DODGE V1.1 | multi-ball detection fix
 -- Standalone Roblox Luau client helper.
--- Based on observed structure: Workspace.Balls -> Ball / Death Ball (BasePart).
+-- Based on observed structure: Workspace.Balls -> Ball, Death Ball, Speed Ball,
+-- Destruction Ball and additional named BaseParts with 'ball' in the name.
 -- Game keybinds in screenshot: Q=left dodge, E=right dodge, R=front dodge.
 -- Caution: input simulation depends on the environment and game input handlers;
 -- this code does not promise an invulnerability window, a saved win streak, or a server-confirmed dodge.
@@ -24,7 +25,7 @@ local config = {
     alive=true, enabled=false, edgeGuard=true, debug=false,
     sensitivity="Normal", cooldown=.85, minimized=false,
     lastDodge=-1e6, inspected=0, threats=0, actionCount=0,
-    lastAction="Waiting", state="Idle", tracked=0
+    lastAction="Waiting", state="Idle", tracked=0, types="none", confirmedMove=0
 }
 local scheme = {
     bg=Color3.fromRGB(14,17,30), surface=Color3.fromRGB(30,35,57),
@@ -85,7 +86,7 @@ create("UIStroke",panel,{Color=scheme.purple,Thickness=1.25})
 local header=create("Frame",panel,{
     BackgroundTransparency=1,Size=UDim2.new(1,0,0,43),Active=true
 })
-local title=label(header,"VELION | BALL AUTO DODGE",
+local title=label(header,"VELION | BALL DODGE V1.1",
     UDim2.fromOffset(12,9),UDim2.fromOffset(295,26),14)
 title.Font=Enum.Font.GothamBold
 local mini=create("TextButton",header,{
@@ -163,36 +164,47 @@ local function playerParts()
     return hum,root
 end
 
+-- A round can contain multiple ball variants simultaneously. Do NOT
+-- whitelist only 'Ball' and 'Death Ball'. Only inspect direct children
+-- of Workspace.Balls, to avoid counting effect/trail pieces.
 local function isBall(p)
     return p:IsA("BasePart")
-        and (p.Name=="Ball" or p.Name=="Death Ball")
+        and p.Name:lower():find("ball",1,true) ~= nil
 end
 
--- Some AlignPosition-controlled balls expose unreliable instantaneous velocity.
--- Compare world-position samples, falling back to AssemblyLinearVelocity when
--- the networked position does not move between observations.
 local function velocityOf(p,now)
-    local data=history[p]
+    local prev=history[p]
     local raw=p.AssemblyLinearVelocity
-    local measured=Vector3.zero
-    local valid=false
-    if data then
-        local dt=now-data.t
-        if dt>.012 and dt<.3 then
-            measured=(p.Position-data.pos)/dt
-            valid=measured.Magnitude>3
+    local measured=nil
+    if prev then
+        local dt=now-prev.t
+        if dt>.008 and dt<.25 then
+            measured=(p.Position-prev.pos)/dt
+        end
+    end
+    local velocity=raw
+    if measured and measured.Magnitude>2 then
+        if raw.Magnitude>2 then
+            velocity=measured*.7+raw*.3
+        else
+            velocity=measured
+        end
+    end
+    -- Network interpolation can yield unreasonable momentary spikes.
+    local maxVelocity=400
+    if velocity.Magnitude>maxVelocity then
+        velocity=velocity.Unit*maxVelocity
+    end
+    local old=speedCache[p]
+    local acceleration=Vector3.zero
+    if old and old.seen and now>old.seen then
+        acceleration=(velocity-old.v)/math.max(.025,now-old.seen)
+        if acceleration.Magnitude>550 then
+            acceleration=acceleration.Unit*550
         end
     end
     history[p]={pos=p.Position,t=now}
-    if valid then
-        if raw.Magnitude>3 then
-            -- Measured displacement dominates because AlignPosition can drive
-            -- the projectile without steady velocity replication.
-            return measured*.75+raw*.25
-        end
-        return measured
-    end
-    return raw
+    speedCache[p]={v=velocity,a=acceleration,seen=now}
 end
 
 local function checkGround(point,character,balls)
@@ -220,30 +232,64 @@ local function rayClear(startPos,endPos,character,balls)
     return hit==nil
 end
 
-local function nearestCollision(ball,velocity,playerPosition,playerVelocity,maxTime)
-    -- Relative-position closest approach (3D), future time within horizon.
-    local relative=ball.Position-playerPosition
-    local relVelocity=velocity-playerVelocity
-    local norm=relVelocity:Dot(relVelocity)
-    if norm<25 then return nil end
-    local t=math.clamp(-relative:Dot(relVelocity)/norm,0,maxTime)
-    if relative:Dot(relVelocity)>=0 then return nil end
-    local separation=(relative+relVelocity*t).Magnitude
-    return t,separation
+-- Simulate a few short future points with observed acceleration.
+-- This is an estimate only. AlignPosition may retarget between samples.
+local function predicted(p,t)
+    local data=speedCache[p]
+    local v=data and data.v or p.AssemblyLinearVelocity
+    local a=data and data.a or Vector3.zero
+    return p.Position + v*t + a*(.5*t*t)
+end
+
+local function possibleImpact(p,playerPos,playerVel,horizon,hitRadius)
+    local data=speedCache[p]
+    local velocity=data and data.v or p.AssemblyLinearVelocity
+    local gap=(p.Position-playerPos).Magnitude
+    if gap<=hitRadius then return 0,gap end
+    if velocity.Magnitude<4 then return nil,nil end
+    local bestT=0
+    local closest=gap
+    local step=math.min(.06,horizon/8)
+    local t=step
+    while t<=horizon+1e-4 do
+        local at=predicted(p,t)
+        local expectedPlayer=playerPos+playerVel*math.min(t,.22)
+        local d=(at-expectedPlayer).Magnitude
+        if d<closest then closest=d;bestT=t end
+        t+=step
+    end
+    if closest<=hitRadius then return bestT,closest end
+
+    -- Conservative near-field fallback for a fast homing ball that can
+    -- change heading faster than simple constant-velocity prediction.
+    local toward=playerPos-p.Position
+    if gap<hitRadius+14 and gap>0 then
+        local closing=velocity:Dot(toward.Unit)
+        if closing>12 then
+            local eta=(gap-hitRadius)/closing
+            if eta>=0 and eta<=math.min(horizon,.30) then
+                return eta,closest
+            end
+        end
+    end
+    return nil,closest
 end
 
 local function trajectoryRisk(target,balls,now,delay)
-    local minDist=math.huge
+    local minimum=math.huge
     for _,p in ipairs(balls) do
         if p.Parent and isBall(p) then
-            local cache=speedCache[p]
-            local v=cache and cache.v or p.AssemblyLinearVelocity
-            local proj=p.Position+v*delay
-            local dist=(proj-target).Magnitude-p.Size.Magnitude*.45
-            if dist<minDist then minDist=dist end
+            local ballRadius=math.max(p.Size.X,p.Size.Y,p.Size.Z)*.5
+            -- Evaluate the destination at multiple points. Avoid steering
+            -- the player toward another simultaneously incoming ball.
+            for _,t in ipairs({.12,.22,.36}) do
+                local future=predicted(p,math.max(t,delay))
+                local dist=(future-target).Magnitude-ballRadius
+                if dist<minimum then minimum=dist end
+            end
         end
     end
-    return minDist
+    return minimum
 end
 
 local function sendDodge(key)
@@ -287,13 +333,24 @@ local function detect()
 
     local now=os.clock()
     local balls={}
+    local typeCount={}
     config.tracked=0
     for _,p in ipairs(ballsFolder:GetChildren()) do
         if isBall(p) then
             balls[#balls+1]=p
             config.tracked+=1
-            speedCache[p]={v=velocityOf(p,now),seen=now}
+            typeCount[p.Name]=(typeCount[p.Name] or 0)+1
+            velocityOf(p,now)
         end
+    end
+    local typeList={}
+    for name,count in pairs(typeCount) do
+        typeList[#typeList+1]=name..(count>1 and (" x"..count) or "")
+    end
+    table.sort(typeList)
+    config.types=table.concat(typeList,", ")
+    if #config.types>72 then
+        config.types=config.types:sub(1,69).."..."
     end
     -- Only live Balls are tracked, no Workspace-wide scanning.
     for p in pairs(history) do
@@ -315,9 +372,9 @@ local function detect()
     end
 
     local profile=({
-        Safe={horizon=.42,hitRadius=5.6,react=.30,range=80},
-        Normal={horizon=.62,hitRadius=6.5,react=.38,range=105},
-        Aggressive={horizon=.82,hitRadius=8.0,react=.50,range=125}
+        Safe={horizon=.52,hitRadius=5.6,react=.36,range=100},
+        Normal={horizon=.72,hitRadius=6.6,react=.46,range=135},
+        Aggressive={horizon=.90,hitRadius=8.0,react=.55,range=170}
     })[config.sensitivity]
     local position=root.Position+Vector3.new(0,.8,0)
     local ownVel=root.AssemblyLinearVelocity
@@ -327,11 +384,12 @@ local function detect()
 
     for _,p in ipairs(balls) do
         local velocity=speedCache[p].v
-        if velocity.Magnitude>8
-            and (p.Position-position).Magnitude<profile.range then
-            local t,miss=nearestCollision(p,velocity,position,ownVel,profile.horizon)
-            local hit=profile.hitRadius+math.max(p.Size.X,p.Size.Y,p.Size.Z)*.55
-            if t and miss<=hit then
+        if (p.Position-position).Magnitude<profile.range then
+            local hit=profile.hitRadius+math.max(p.Size.X,p.Size.Y,p.Size.Z)*.5
+            local t,miss=possibleImpact(
+                p,position,ownVel,profile.horizon,hit
+            )
+            if t then
                 config.threats+=1
                 local score=(hit-miss)*3+(profile.horizon-t)*6
                 if score>dangerScore then
@@ -407,8 +465,23 @@ local function detect()
     if sent then
         config.lastDodge=now
         config.actionCount+=1
-        config.lastAction=best.key.." sent ("..method..")"
-        config.state=config.lastAction.." | unverified"
+        config.lastAction=best.key.." input sent ("..method..")"
+        config.state=config.lastAction.." | awaiting movement"
+        local origin=root.Position
+        local charAtSend=lp.Character
+        task.delay(.22,function()
+            if not config.alive then return end
+            local currentRoot=charAtSend and charAtSend:FindFirstChild("HumanoidRootPart")
+            if currentRoot and currentRoot.Parent then
+                local delta=(currentRoot.Position-origin).Magnitude
+                if delta>2.5 then
+                    config.confirmedMove+=1
+                    config.lastAction=best.key.." | movement observed ("..string.format("%.1f",delta).." studs)"
+                else
+                    config.lastAction=best.key.." | NO displacement detected; input may be ignored"
+                end
+            end
+        end)
     else
         config.lastAction="INPUT ERROR: "..method
         config.state=config.lastAction
@@ -432,7 +505,7 @@ end
 connect(RunService.Heartbeat,function(dt)
     if not config.alive then return end
     accumulator+=dt
-    if accumulator<.035 then return end
+    if accumulator<.025 then return end
     accumulator=0
     local ok,err=pcall(detect)
     if not ok then
@@ -443,10 +516,10 @@ end)
 task.spawn(function()
     while config.alive and gui.Parent do
         stat.Text=string.format(
-            "Balls: %d | Incoming: %d | Dodges sent: %d\n"
-            .."Win streak: %s (server data only)\n%s",
+            "Balls: %d | Risk: %d | Keys: %d | Motion: %d\n"
+            .."Streak: %s | Types: %s\n%s",
             config.tracked,config.threats,config.actionCount,
-            getStreak(),config.state
+            config.confirmedMove,getStreak(),config.types,config.lastAction
         )
         task.wait(.25)
     end
@@ -497,5 +570,5 @@ end
 shutdown.Event:Connect(cleanup)
 close.MouseButton1Click:Connect(cleanup)
 refresh()
-print("[Velion Ball Auto Dodge V1] Loaded. Q/E/R keybinds.")
+print("[Velion Ball Auto Dodge V1.1] Dynamic ball names + multi-ball prediction. Q/E/R.")
 print("[Auto Dodge] Toggle ON in UI. Requires supported input simulation.")
