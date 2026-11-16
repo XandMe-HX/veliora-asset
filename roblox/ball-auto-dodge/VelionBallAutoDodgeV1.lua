@@ -1,4 +1,4 @@
--- VELION BALL DODGE V1.2 | reliable workspace scan and diagnostics
+-- VELION BALL DODGE V1.3 | native dodge timing assist (not server immunity)
 -- Standalone Roblox Luau client helper.
 -- Based on observed structure: Workspace.Balls -> Ball, Death Ball, Speed Ball,
 -- Destruction Ball and additional named BaseParts with 'ball' in the name.
@@ -23,6 +23,7 @@ end
 
 local config = {
     alive=true, enabled=false, edgeGuard=true, debug=false,
+    perfectDodge=false, windowSeconds=.19,
     sensitivity="Normal", cooldown=.85, minimized=false,
     lastDodge=-1e6, inspected=0, threats=0, actionCount=0,
     lastAction="No dodge attempts", state="Starting scan", tracked=0, types="none", confirmedMove=0,
@@ -79,7 +80,7 @@ gui=create("ScreenGui",pg,{
 local shutdown=create("BindableEvent",gui,{Name="Shutdown"})
 local panel=create("Frame",gui,{
     Position=UDim2.new(.5,-185,0,55),
-    Size=UDim2.fromOffset(370,316),BackgroundColor3=scheme.bg,
+    Size=UDim2.fromOffset(370,357),BackgroundColor3=scheme.bg,
     BorderSizePixel=0,Active=true
 })
 round(panel,11)
@@ -87,7 +88,7 @@ create("UIStroke",panel,{Color=scheme.purple,Thickness=1.25})
 local header=create("Frame",panel,{
     BackgroundTransparency=1,Size=UDim2.new(1,0,0,43),Active=true
 })
-local title=label(header,"VELION | BALL DODGE V1.2",
+local title=label(header,"VELION | BALL DODGE V1.3",
     UDim2.fromOffset(12,9),UDim2.fromOffset(295,26),14)
 title.Font=Enum.Font.GothamBold
 local mini=create("TextButton",header,{
@@ -104,11 +105,12 @@ local onOff=button(panel,"AUTO DODGE: OFF",49)
 local sense=button(panel,"SENSITIVITY: NORMAL",91)
 local edge=button(panel,"EDGE GUARD: ON",133)
 local debug=button(panel,"DEBUG MARKER: OFF",175)
+local perfect=button(panel,"PERFECT DODGE TIMING: OFF",217)
 local stat=label(panel,"Scanning Workspace.Balls...",
-    UDim2.fromOffset(13,217),UDim2.fromOffset(344,89),10)
+    UDim2.fromOffset(13,260),UDim2.fromOffset(344,73),10)
 stat.TextColor3=scheme.muted
 local tip=label(panel,"Q = Left   |   E = Right   |   R = Front",
-    UDim2.fromOffset(15,298),UDim2.fromOffset(340,14),10)
+    UDim2.fromOffset(15,336),UDim2.fromOffset(340,14),10)
 tip.TextColor3=scheme.muted
 
 local indicator=create("BillboardGui",gui,{
@@ -130,6 +132,10 @@ local function refresh()
     edge.Text="EDGE GUARD: "..(config.edgeGuard and "ON" or "OFF")
     edge.BackgroundColor3=config.edgeGuard and scheme.green or scheme.surface
     debug.Text="DEBUG MARKER: "..(config.debug and "ON" or "OFF")
+    perfect.Text="PERFECT DODGE TIMING: "..
+        (config.perfectDodge and "ON" or "OFF")
+    perfect.BackgroundColor3=config.perfectDodge
+        and scheme.green or scheme.surface
 end
 onOff.MouseButton1Click:Connect(function()
     config.enabled=not config.enabled
@@ -153,6 +159,13 @@ end)
 debug.MouseButton1Click:Connect(function()
     config.debug=not config.debug
     if not config.debug then indicator.Enabled=false end
+    refresh()
+end)
+perfect.MouseButton1Click:Connect(function()
+    config.perfectDodge=not config.perfectDodge
+    config.state=config.perfectDodge
+        and "Native dodge timed near predicted contact (no immunity guarantee)"
+        or "Normal collision dodge timing"
     refresh()
 end)
 
@@ -436,11 +449,25 @@ local function detect()
         return
     end
 
+    -- When timing mode is enabled, defer native Q/E/R until closer
+    -- to predicted impact. This does NOT grant invulnerability; any
+    -- immunity frames, if they exist, remain server-authoritative.
+    -- A slightly earlier window is used for faster objects because
+    -- real input delivery and network replication add latency.
+    local reactionWindow=profile.react
+    if config.perfectDodge then
+        local speed=biggest.velocity.Magnitude
+        reactionWindow=math.clamp(
+            config.windowSeconds + math.min(speed/1000,.07),
+            .16,.29
+        )
+    end
     config.state=string.format(
-        "Incoming %s | TTC %.2fs | miss %.1f",
-        biggest.part.Name,biggest.t,biggest.miss
+        "%s %s | TTC %.2fs | trigger %.2fs",
+        config.perfectDodge and "Timing" or "Incoming",
+        biggest.part.Name,biggest.t,reactionWindow
     )
-    if biggest.t>profile.react or now-config.lastDodge<config.cooldown then
+    if biggest.t>reactionWindow or now-config.lastDodge<config.cooldown then
         return
     end
     if UIS:GetFocusedTextBox() then return end
@@ -540,13 +567,14 @@ task.spawn(function()
     while config.alive and gui.Parent do
         stat.Text=string.format(
             "Balls: %d / %d | Risk: %d | Keys: %d | Motion: %d\n"
-            .."Folder: %s | Char: %s | Scan: %d\n"
+            .."Folder: %s | Char: %s | Timing: %s\n"
             .."Types: %s\n"
             .."State: %s",
             config.tracked,config.rawChildren,config.threats,
             config.actionCount,config.confirmedMove,
             config.folderStatus,config.characterStatus,
-            config.scanCount,config.types,config.state
+            config.perfectDodge and "ON" or "OFF",
+            config.types,config.state
         )
         task.wait(.25)
     end
@@ -577,11 +605,11 @@ connect(UIS.InputEnded,function(input)
 end)
 mini.MouseButton1Click:Connect(function()
     config.minimized=not config.minimized
-    for _,item in ipairs({onOff,sense,edge,debug,stat,tip}) do
+    for _,item in ipairs({onOff,sense,edge,debug,perfect,stat,tip}) do
         item.Visible=not config.minimized
     end
     panel.Size=config.minimized and UDim2.fromOffset(370,43)
-        or UDim2.fromOffset(370,316)
+        or UDim2.fromOffset(370,357)
     mini.Text=config.minimized and "+" or "-"
 end)
 
@@ -597,5 +625,5 @@ end
 shutdown.Event:Connect(cleanup)
 close.MouseButton1Click:Connect(cleanup)
 refresh()
-print("[Velion Ball Auto Dodge V1.2] Count all direct BaseParts before checking character.")
+print("[Velion Ball Auto Dodge V1.3] Native dodge timing assist, not server immunity.")
 print("[Auto Dodge] Toggle ON in UI. Requires supported input simulation.")
