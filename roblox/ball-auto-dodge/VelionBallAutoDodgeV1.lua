@@ -1,4 +1,4 @@
--- VELION BALL DODGE V1.1 | multi-ball detection fix
+-- VELION BALL DODGE V1.2 | reliable workspace scan and diagnostics
 -- Standalone Roblox Luau client helper.
 -- Based on observed structure: Workspace.Balls -> Ball, Death Ball, Speed Ball,
 -- Destruction Ball and additional named BaseParts with 'ball' in the name.
@@ -25,7 +25,8 @@ local config = {
     alive=true, enabled=false, edgeGuard=true, debug=false,
     sensitivity="Normal", cooldown=.85, minimized=false,
     lastDodge=-1e6, inspected=0, threats=0, actionCount=0,
-    lastAction="Waiting", state="Idle", tracked=0, types="none", confirmedMove=0
+    lastAction="No dodge attempts", state="Starting scan", tracked=0, types="none", confirmedMove=0,
+    rawChildren=0, characterStatus="Unknown", folderStatus="Unknown", scanCount=0
 }
 local scheme = {
     bg=Color3.fromRGB(14,17,30), surface=Color3.fromRGB(30,35,57),
@@ -86,7 +87,7 @@ create("UIStroke",panel,{Color=scheme.purple,Thickness=1.25})
 local header=create("Frame",panel,{
     BackgroundTransparency=1,Size=UDim2.new(1,0,0,43),Active=true
 })
-local title=label(header,"VELION | BALL DODGE V1.1",
+local title=label(header,"VELION | BALL DODGE V1.2",
     UDim2.fromOffset(12,9),UDim2.fromOffset(295,26),14)
 title.Font=Enum.Font.GothamBold
 local mini=create("TextButton",header,{
@@ -104,7 +105,7 @@ local sense=button(panel,"SENSITIVITY: NORMAL",91)
 local edge=button(panel,"EDGE GUARD: ON",133)
 local debug=button(panel,"DEBUG MARKER: OFF",175)
 local stat=label(panel,"Scanning Workspace.Balls...",
-    UDim2.fromOffset(13,219),UDim2.fromOffset(344,83),11)
+    UDim2.fromOffset(13,217),UDim2.fromOffset(344,89),10)
 stat.TextColor3=scheme.muted
 local tip=label(panel,"Q = Left   |   E = Right   |   R = Front",
     UDim2.fromOffset(15,298),UDim2.fromOffset(340,14),10)
@@ -157,19 +158,23 @@ end)
 
 local function playerParts()
     local char=lp.Character
-    local hum=char and char:FindFirstChildOfClass("Humanoid")
-    local root=char and char:FindFirstChild("HumanoidRootPart")
-    if not hum or hum.Health<=0 or not root then return nil,nil end
-    if hum.Sit then return nil,nil end
-    return hum,root
+    if not char then return nil,nil,"Character missing" end
+    local hum=char:FindFirstChildOfClass("Humanoid")
+    local root=char:FindFirstChild("HumanoidRootPart")
+    if not hum then return nil,nil,"Humanoid missing" end
+    if hum.Health<=0 then return nil,nil,"Character defeated / respawning" end
+    if not root or not root:IsA("BasePart") then
+        return nil,nil,"RootPart missing"
+    end
+    if hum.Sit then return nil,nil,"Seated" end
+    return hum,root,"Ready"
 end
 
--- A round can contain multiple ball variants simultaneously. Do NOT
--- whitelist only 'Ball' and 'Death Ball'. Only inspect direct children
--- of Workspace.Balls, to avoid counting effect/trail pieces.
+-- Workspace.Balls contains real ball Parts (including future variants).
+-- Count ALL direct BasePart children, regardless of their current name.
+-- Ignore nested AlignPosition, trails and attachments automatically.
 local function isBall(p)
     return p:IsA("BasePart")
-        and p.Name:lower():find("ball",1,true) ~= nil
 end
 
 local function velocityOf(p,now)
@@ -323,24 +328,27 @@ local function sendDodge(key)
 end
 
 local function detect()
-    local hum,root=playerParts()
+    -- First update ball counts, regardless of character existence, respawn,
+    -- whether Auto Dodge is enabled, or if currently in the lobby.
     local ballsFolder=workspace:FindFirstChild("Balls")
-    if not hum or not ballsFolder then
-        config.state=not hum and "Waiting for character" or "Workspace.Balls missing"
-        indicator.Enabled=false
-        return
-    end
-
-    local now=os.clock()
+    config.scanCount+=1
+    config.tracked=0
+    config.rawChildren=0
+    config.types="none"
+    config.folderStatus=ballsFolder and "Found" or "Missing"
     local balls={}
     local typeCount={}
-    config.tracked=0
-    for _,p in ipairs(ballsFolder:GetChildren()) do
-        if isBall(p) then
-            balls[#balls+1]=p
-            config.tracked+=1
-            typeCount[p.Name]=(typeCount[p.Name] or 0)+1
-            velocityOf(p,now)
+    local now=os.clock()
+    if ballsFolder then
+        local children=ballsFolder:GetChildren()
+        config.rawChildren=#children
+        for _,p in ipairs(children) do
+            if isBall(p) then
+                balls[#balls+1]=p
+                config.tracked+=1
+                typeCount[p.Name]=(typeCount[p.Name] or 0)+1
+                velocityOf(p,now)
+            end
         end
     end
     local typeList={}
@@ -354,19 +362,34 @@ local function detect()
     end
     -- Only live Balls are tracked, no Workspace-wide scanning.
     for p in pairs(history) do
-        if not p.Parent or p.Parent~=ballsFolder then
+        if not ballsFolder or p.Parent~=ballsFolder then
             history[p]=nil
             speedCache[p]=nil
         end
     end
 
+    local hum,root,characterStatus=playerParts()
+    config.characterStatus=characterStatus
+    config.threats=0
+    if not ballsFolder then
+        config.state="Workspace.Balls is NOT present on client"
+        indicator.Enabled=false
+        return
+    end
     if #balls==0 then
-        config.state="No active balls"
+        config.state=config.rawChildren>0
+            and "Folder populated but no BasePart children"
+            or "Folder empty: no balls spawned in this phase"
+        indicator.Enabled=false
+        return
+    end
+    if not hum then
+        config.state="Balls found; "..characterStatus.."; prediction paused"
         indicator.Enabled=false
         return
     end
     if not config.enabled then
-        config.state="Disabled"
+        config.state="Balls found; Auto Dodge switched OFF"
         indicator.Enabled=false
         return
     end
@@ -516,10 +539,14 @@ end)
 task.spawn(function()
     while config.alive and gui.Parent do
         stat.Text=string.format(
-            "Balls: %d | Risk: %d | Keys: %d | Motion: %d\n"
-            .."Streak: %s | Types: %s\n%s",
-            config.tracked,config.threats,config.actionCount,
-            config.confirmedMove,getStreak(),config.types,config.lastAction
+            "Balls: %d / %d | Risk: %d | Keys: %d | Motion: %d\n"
+            .."Folder: %s | Char: %s | Scan: %d\n"
+            .."Types: %s\n"
+            .."State: %s",
+            config.tracked,config.rawChildren,config.threats,
+            config.actionCount,config.confirmedMove,
+            config.folderStatus,config.characterStatus,
+            config.scanCount,config.types,config.state
         )
         task.wait(.25)
     end
@@ -570,5 +597,5 @@ end
 shutdown.Event:Connect(cleanup)
 close.MouseButton1Click:Connect(cleanup)
 refresh()
-print("[Velion Ball Auto Dodge V1.1] Dynamic ball names + multi-ball prediction. Q/E/R.")
+print("[Velion Ball Auto Dodge V1.2] Count all direct BaseParts before checking character.")
 print("[Auto Dodge] Toggle ON in UI. Requires supported input simulation.")
