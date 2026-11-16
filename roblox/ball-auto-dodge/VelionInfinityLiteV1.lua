@@ -37,7 +37,8 @@ local C={
     groundGuard=true,level="Normal",
     minimized=false,scan=0,repulsions=0,threats=0,count=0,
     state="Ready (OFF)",types="",side=1,sideUntil=0,
-    lastDash=-1e6,dashAttempts=0,inputStatus="Not tested",runHeld=false,
+    lastDash=-1e6,dashAttempts=0,dashAccepted=false,
+    inputStatus="Not tested",runHeld=false,
 }
 local settings={
     Safe={horizon=.32,margin=2.4,step=1.4,close=8},
@@ -443,6 +444,7 @@ local function tick(now)
             C.lastDash=now
             C.dashAttempts+=1
             dashSent=pressDash(key)
+            C.dashAccepted=dashSent
         else
             C.inputStatus="Dash blocked: no safe Q/E/R direction"
         end
@@ -454,7 +456,7 @@ local function tick(now)
             or "Threat detected; Auto Dash monitoring"
         return
     end
-    if C.autoDash and now-C.lastDash<.24 and dashSent then
+    if C.autoDash and C.dashAccepted and now-C.lastDash<.24 then
         C.state="Native dash attempted; Infinity paused briefly"
         return
     end
