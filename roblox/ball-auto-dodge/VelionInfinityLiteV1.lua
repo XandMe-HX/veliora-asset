@@ -1,4 +1,4 @@
--- VELION INFINITY LITE V1.0
+-- VELION INFINITY LITE V1.1 | independent native Auto Dash and Auto Run
 -- Client-side ball avoidance for Dodge or Die-like Roblox arenas.
 -- Based on provided reference's predicted-position/pushout concept.
 -- No remote code, UI libraries, auto-parry, or server invulnerability claims.
@@ -33,9 +33,11 @@ if duplicate then
 end
 
 local C={
-    running=true,enabled=false,groundGuard=true,level="Normal",
+    running=true,enabled=false,autoDash=false,autoRun=false,
+    groundGuard=true,level="Normal",
     minimized=false,scan=0,repulsions=0,threats=0,count=0,
     state="Ready (OFF)",types="",side=1,sideUntil=0,
+    lastDash=-1e6,dashAttempts=0,inputStatus="Not tested",runHeld=false,
 }
 local settings={
     Safe={horizon=.32,margin=2.4,step=1.4,close=8},
@@ -62,7 +64,7 @@ local gui=make("ScreenGui",playerGui,{
 })
 local shutdown=make("BindableEvent",gui,{Name="Shutdown"})
 local main=make("Frame",gui,{
-    Position=UDim2.new(.5,-186,0,60),Size=UDim2.fromOffset(372,292),
+    Position=UDim2.new(.5,-186,0,60),Size=UDim2.fromOffset(372,403),
     BackgroundColor3=colors.bg,BorderSizePixel=0,Active=true
 })
 corner(main,12)
@@ -78,7 +80,7 @@ local function text(parent,content,x,y,w,h,size)
         BackgroundTransparency=1,TextWrapped=true,Font=Enum.Font.Gotham
     })
 end
-local title=text(header,"VELION | INFINITY LITE",12,8,275,28,14)
+local title=text(header,"VELION | INFINITY LITE V1.1",12,8,275,28,14)
 title.Font=Enum.Font.GothamBold
 local function makeButton(label,x,y,w,h)
     local b=make("TextButton",main,{
@@ -95,9 +97,11 @@ local exit=makeButton("X",337,8,25,25)
 local power=makeButton("INFINITY: OFF",12,52,348,40)
 local sensitivity=makeButton("SENSITIVITY: NORMAL",12,100,348,34)
 local guard=makeButton("EDGE GUARD: ON",12,141,348,34)
-local status=text(main,"Ready.",13,185,345,91,11)
+local dash=makeButton("AUTO DASH (Q/E/R): OFF",12,183,348,36)
+local run=makeButton("AUTO RUN (SHIFT): OFF",12,227,348,36)
+local status=text(main,"Ready.",13,274,345,103,11)
 status.TextColor3=colors.muted
-local note=text(main,"No immunity guarantee  |  Right Ctrl: toggle GUI",13,274,350,15,10)
+local note=text(main,"Client only | Right Ctrl: toggle GUI",13,381,350,15,10)
 note.TextColor3=colors.muted
 
 local connections={}
@@ -112,6 +116,10 @@ local function repaint()
     sensitivity.Text="SENSITIVITY: "..string.upper(C.level)
     guard.Text="EDGE GUARD: "..(C.groundGuard and "ON" or "OFF")
     guard.BackgroundColor3=C.groundGuard and colors.green or colors.surf
+    dash.Text="AUTO DASH (Q/E/R): "..(C.autoDash and "ON" or "OFF")
+    dash.BackgroundColor3=C.autoDash and colors.green or colors.surf
+    run.Text="AUTO RUN (SHIFT): "..(C.autoRun and "ON" or "OFF")
+    run.BackgroundColor3=C.autoRun and colors.green or colors.surf
 end
 connect(power.MouseButton1Click,function()
     C.enabled=not C.enabled
@@ -130,6 +138,88 @@ connect(sensitivity.MouseButton1Click,function()
 end)
 connect(guard.MouseButton1Click,function()
     C.groundGuard=not C.groundGuard
+    repaint()
+end)
+
+-- Native dodge uses the game's Q/E/R keybinds. Executor input support
+-- varies; a successful API call is NOT proof the game accepted the action.
+local VIM
+pcall(function()
+    VIM=game:GetService("VirtualInputManager")
+end)
+
+local keyData={
+    Q={code=0x51,key=Enum.KeyCode.Q},
+    E={code=0x45,key=Enum.KeyCode.E},
+    R={code=0x52,key=Enum.KeyCode.R},
+    Shift={code=0x10,key=Enum.KeyCode.LeftShift}
+}
+local function emitKey(name,down)
+    local binding=keyData[name]
+    if not binding then return false,"invalid key" end
+    local sender=down and keypress or keyrelease
+    if type(sender)=="function" then
+        local ok=pcall(sender,binding.code)
+        if ok then return true,"executor keyboard" end
+    end
+    if VIM then
+        local ok=pcall(function()
+            VIM:SendKeyEvent(down,binding.key,false,game)
+        end)
+        if ok then return true,"virtual keyboard" end
+    end
+    return false,"input API unavailable"
+end
+
+local function releaseSprint()
+    if C.runHeld then
+        emitKey("Shift",false)
+        C.runHeld=false
+    end
+end
+
+local function pressDash(name)
+    local ok,method=emitKey(name,true)
+    C.inputStatus=ok and (name.." sent via "..method.." (unverified)")
+        or ("Dash failed: "..method)
+    if not ok then return false end
+    task.delay(.075,function()
+        -- Release even if the GUI is closed to avoid stuck dodge inputs.
+        emitKey(name,false)
+    end)
+    return true
+end
+
+local function updateAutoRun()
+    if not C.running then return end
+    local char=me.Character
+    local hum=char and char:FindFirstChildOfClass("Humanoid")
+    local moving=hum and hum.Health>0 and not hum.Sit
+        and hum.MoveDirection.Magnitude>.07
+    local textbox=UIS:GetFocusedTextBox()
+    local desired=C.autoRun and moving and not textbox
+    if desired and not C.runHeld then
+        local ok,method=emitKey("Shift",true)
+        if ok then
+            C.runHeld=true
+            C.inputStatus="Sprint held via "..method
+        else
+            C.inputStatus="Sprint failed: "..method
+        end
+    elseif not desired and C.runHeld then
+        releaseSprint()
+        C.inputStatus="Sprint released"
+    end
+end
+
+connect(dash.MouseButton1Click,function()
+    C.autoDash=not C.autoDash
+    C.state=C.autoDash and "Auto Dash watching threats" or "Auto Dash OFF"
+    repaint()
+end)
+connect(run.MouseButton1Click,function()
+    C.autoRun=not C.autoRun
+    if not C.autoRun then releaseSprint() end
     repaint()
 end)
 
@@ -249,10 +339,51 @@ local function chooseMove(root,character,ball,velocity,profile,now)
     return nil
 end
 
+
+-- Select a native dodge key based on safe nearby destinations.
+-- Relative to character orientation: Q left, E right, R forward.
+-- Uses short probes rather than pathfinding or Workspace-wide scans.
+local function chooseDashKey(root,character,now)
+    local look=root.CFrame.LookVector
+    local right=root.CFrame.RightVector
+    local directions={
+        {key="Q",v=-right},{key="E",v=right},{key="R",v=look}
+    }
+    local bestKey,bestScore=nil,-math.huge
+    for _,option in ipairs(directions) do
+        local v=Vector3.new(option.v.X,0,option.v.Z)
+        if v.Magnitude>.1 then
+            local endpoint=root.Position+v.Unit*8
+            if safePosition(root,character,endpoint) then
+                local nearest=math.huge
+                for _,ball in ipairs(currentBalls) do
+                    if ball.Parent then
+                        local velocity=samples[ball] and samples[ball].v
+                            or ball.AssemblyLinearVelocity
+                        local predicted=ball.Position+velocity*.19
+                        local gap=(predicted-endpoint).Magnitude
+                            -math.max(ball.Size.X,ball.Size.Y,ball.Size.Z)*.5
+                        if gap<nearest then nearest=gap end
+                    end
+                end
+                -- Front dashes are a fallback if side moves are equally safe.
+                local score=nearest-(option.key=="R" and 1.4 or 0)
+                if score>bestScore then
+                    bestScore,bestKey=score,option.key
+                end
+            end
+        end
+    end
+    return bestKey
+end
+
 local function tick(now)
     scanBalls(now)
     C.threats=0
-    if not C.enabled then C.state="Disabled";return end
+    if not C.enabled and not C.autoDash then
+        C.state=C.autoRun and "Auto Run ready" or "All assists disabled"
+        return
+    end
     local character=me.Character
     local humanoid=character and character:FindFirstChildOfClass("Humanoid")
     local root=character and character:FindFirstChild("HumanoidRootPart")
@@ -304,6 +435,30 @@ local function tick(now)
         C.state="Clear | no collision risk"
         return
     end
+    local dashSent=false
+    if C.autoDash and now-C.lastDash>=.85
+        and not UIS:GetFocusedTextBox() then
+        local key=chooseDashKey(root,character,now)
+        if key then
+            C.lastDash=now
+            C.dashAttempts+=1
+            dashSent=pressDash(key)
+        else
+            C.inputStatus="Dash blocked: no safe Q/E/R direction"
+        end
+    end
+    -- Avoid fighting a native dash with CFrame nudges during its short
+    -- animation. If Auto Dash is OFF, Infinity works exactly as before.
+    if not C.enabled then
+        C.state=dashSent and "Dash input sent (not server-confirmed)"
+            or "Threat detected; Auto Dash monitoring"
+        return
+    end
+    if C.autoDash and now-C.lastDash<.24 and dashSent then
+        C.state="Native dash attempted; Infinity paused briefly"
+        return
+    end
+
     local offset=chooseMove(root,character,target.ball,
         target.velocity,profile,now)
     if not offset then
@@ -331,6 +486,10 @@ connect(RunService.Heartbeat,function(dt)
     if accumulator>=.045 then
         accumulator=0
         local ok,err=pcall(tick,os.clock())
+        local runOK,runErr=pcall(updateAutoRun)
+        if not runOK then
+            C.inputStatus="Sprint error: "..tostring(runErr):sub(1,35)
+        end
         if not ok then
             C.state="Error: "..tostring(err):sub(1,52)
             C.enabled=false
@@ -340,11 +499,11 @@ connect(RunService.Heartbeat,function(dt)
     if uiAccumulator>=.24 then
         uiAccumulator=0
         status.Text=string.format(
-            "Balls: %d | Threats: %d | Shifts: %d\n"
-            .."Types: %s\n%s\n"
-            .."Client reposition only; server may correct movement",
-            C.count,C.threats,C.repulsions,
-            C.types~="" and C.types or "none",C.state
+            "Balls: %d | Threats: %d | Shifts: %d | Dashes: %d\n"
+            .."Types: %s\n%s\nInput: %s\n"
+            .."Dash/sprint require accepted game inputs",
+            C.count,C.threats,C.repulsions,C.dashAttempts,
+            C.types~="" and C.types or "none",C.state,C.inputStatus
         )
     end
 end)
@@ -375,17 +534,20 @@ connect(UIS.InputBegan,function(input,processed)
 end)
 connect(mini.MouseButton1Click,function()
     C.minimized=not C.minimized
-    for _,v in ipairs({power,sensitivity,guard,status,note}) do
+    for _,v in ipairs({power,sensitivity,guard,dash,run,status,note}) do
         v.Visible=not C.minimized
     end
     main.Size=C.minimized and UDim2.fromOffset(372,43)
-        or UDim2.fromOffset(372,292)
+        or UDim2.fromOffset(372,403)
     mini.Text=C.minimized and "+" or "-"
 end)
 local function unload()
     if not C.running then return end
     C.running=false
     C.enabled=false
+    C.autoDash=false
+    C.autoRun=false
+    releaseSprint()
     for _,v in ipairs(connections) do v:Disconnect() end
     table.clear(samples)
     table.clear(currentBalls)
@@ -394,4 +556,4 @@ end
 connect(shutdown.Event,unload)
 connect(exit.MouseButton1Click,unload)
 repaint()
-print("[Velion Infinity Lite V1] Loaded - no external libraries, no network downloads")
+print("[Velion Infinity Lite V1.1] Auto Dash Q/E/R + Auto Run Shift; no external libraries")
