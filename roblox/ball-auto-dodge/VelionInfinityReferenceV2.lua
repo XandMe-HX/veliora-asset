@@ -639,7 +639,9 @@ pcall(function() VIM=game:GetService("VirtualInputManager") end)
 local function keyEvent(name,down)
     local key=keyMap[name]
     if not key then return false,"Invalid key" end
-    local sender=down and keypress or keyrelease
+    -- Avoid Lua and/or fallback: if keypress is nil, never call keyrelease as a press.
+    local sender
+    if down then sender=keypress else sender=keyrelease end
     if type(sender)=="function" then
         local ok,result=pcall(sender,key.code)
         if ok and result~=false then return true,"executor" end
