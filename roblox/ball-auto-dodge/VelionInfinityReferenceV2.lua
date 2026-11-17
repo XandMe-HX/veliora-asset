@@ -1,4 +1,4 @@
--- VELION INFINITY V2 - adapted from user-supplied Dodge or Die Infinity source
+-- VELION INFINITY V2.1 - reference Infinity core with explicit native input diagnostics
 -- Original mechanics credited to Leewalky. All server-side outcomes remain unverified.
 -- Local GUI, bounded scans and optional input features; no external downloads.
 local Config = {
@@ -569,7 +569,7 @@ local function rounding(parent,size)
 end
 local panel=ui("Frame",gui,{
     Position=UDim2.new(.5,-187,0,70),
-    Size=UDim2.fromOffset(374,382),
+    Size=UDim2.fromOffset(374,445),
     BackgroundColor3=Palette.background,
     BorderSizePixel=0,Active=true
 })
@@ -587,7 +587,7 @@ local function caption(parent,t,x,y,w,h,size)
         TextXAlignment=Enum.TextXAlignment.Left,TextWrapped=true
     })
 end
-local title=caption(header,"VELION | GOJO INFINITY V2",13,9,285,25,14)
+local title=caption(header,"VELION | GOJO INFINITY V2.1",13,9,285,25,14)
 title.Font=Enum.Font.GothamBold
 local function button(title,x,y,w,h)
     local obj=ui("TextButton",panel,{
@@ -605,11 +605,13 @@ local infinity=button("GOJO INFINITY: OFF",12,52,350,42)
 local autoDash=button("AUTO DASH Q/E/R: OFF",12,104,350,37)
 local autoRun=button("AUTO RUN SHIFT: OFF",12,150,350,37)
 local sensitivity=button("DASH SENSITIVITY: NORMAL",12,196,350,34)
-local status=caption(panel,"Initializing...",13,238,346,111,11)
+local testInput=button("TEST E KEY (CHECK INPUT)",12,239,350,32)
+local status=caption(panel,"Initializing...",13,280,346,132,11)
 status.TextColor3=Palette.muted
 local note=caption(panel,
-    "Faithful Infinity core | No server immunity guarantee",
-    13,359,348,17,10)
+    "InputBegan = key observed, not dash confirmed.",
+    13,418,348,17,10)
+note.TextColor3=Palette.muted
 note.TextColor3=Palette.muted
 
 local alive=true
@@ -619,6 +621,10 @@ local runHeld=false
 local lastDash=-1e6
 local dashAttempts=0
 local lastKey="No dash attempted"
+local lastObserved="none"
+local observedAt={}
+local injectedKey=""
+local injectingAt=-1e6
 local dashSensitivity=1
 local lastUi=0
 local lastCheck=0
@@ -632,19 +638,52 @@ local VIM
 pcall(function() VIM=game:GetService("VirtualInputManager") end)
 local function keyEvent(name,down)
     local key=keyMap[name]
-    if not key then return false end
+    if not key then return false,"Invalid key" end
     local sender=down and keypress or keyrelease
     if type(sender)=="function" then
-        local ok=pcall(sender,key.code)
-        if ok then return true end
+        local ok,result=pcall(sender,key.code)
+        if ok and result~=false then return true,"executor" end
     end
     if VIM then
-        local ok=pcall(function()
-            VIM:SendKeyEvent(down,key.enum,false,game)
+        local ok,result=pcall(function()
+            return VIM:SendKeyEvent(down,key.enum,false,game)
         end)
-        if ok then return true end
+        if ok and result~=false then return true,"virtual input" end
     end
-    return false
+    return false,"No permitted input API"
+end
+-- This confirms an InputBegan event, NOT that the game's dash handler ran.
+track(UIS.InputBegan:Connect(function(input,processed)
+    local key=input.KeyCode.Name
+    if key=="Q" or key=="E" or key=="R" then
+        observedAt[key]=osClock()
+        local origin=(key==injectedKey and
+            osClock()-injectingAt<.30) and "during injection" or "physical/other"
+        lastObserved=key.." ("..origin..
+            ", processed="..tostring(processed)..")"
+    end
+end))
+local function attemptKey(name)
+    local started=osClock()
+    injectedKey=name
+    injectingAt=started
+    local ok,method=keyEvent(name,true)
+    if not ok then
+        lastKey=name.." FAILED: "..method
+        return false
+    end
+    lastKey=name.." sent via "..method.."; checking events..."
+    task.delay(.145,function()
+        keyEvent(name,false)
+    end)
+    task.delay(.28,function()
+        if not alive then return end
+        local seen=(observedAt[name] or -1e6)>=started
+        lastKey=name.." via "..method..
+            (seen and " | InputBegan observed" or " | NOT OBSERVED by InputBegan")..
+            " (dash unverified)"
+    end)
+    return true
 end
 local function sprintRelease()
     if runHeld then
@@ -762,14 +801,7 @@ local function nativeDash()
     end
     lastDash=now
     dashAttempts+=1
-    local ok=keyEvent(choice,true)
-    lastKey=ok and (choice.." input sent (unverified)")
-        or (choice.." input unavailable")
-    if ok then
-        task.delay(.075,function()
-            keyEvent(choice,false)
-        end)
-    end
+    attemptKey(choice)
 end
 local function paint()
     infinity.Text="GOJO INFINITY: "..(State.Infinity and "ON" or "OFF")
@@ -806,6 +838,11 @@ track(sensitivity.MouseButton1Click:Connect(function()
     dashSensitivity=dashSensitivity%3+1
     paint()
 end))
+track(testInput.MouseButton1Click:Connect(function()
+    if not alive then return end
+    -- A controlled attempt, independent of threat detection and cooldown.
+    attemptKey("E")
+end))
 
 track(RunService.Heartbeat:Connect(function(dt)
     if not alive then return end
@@ -824,11 +861,12 @@ track(RunService.Heartbeat:Connect(function(dt)
             "Balls: %d | Infinity: %s | Attempts: %d\n"
             .."Root: %s | BallFolder: %s\n"
             .."Input: %s\n"
-            .."Original hitbox/sweep and Pre+PostSimulation core.",
+            .."Observed Q/E/R: %s\n"
+            .."Press a real key, then press TEST E to compare.",
             #BallCache,State.Infinity and "ON" or "OFF",
             dashAttempts,Root and "Ready" or "Missing",
             BallsContainer and "Found" or "Missing",
-            lastKey
+            lastKey,lastObserved
         )
     end
 end))
@@ -864,8 +902,8 @@ end))
 track(mini.MouseButton1Click:Connect(function()
     local minimized=panel.Size.Y.Offset>50
     panel.Size=minimized and UDim2.fromOffset(374,43)
-        or UDim2.fromOffset(374,382)
-    for _,v in ipairs({infinity,autoDash,autoRun,sensitivity,status,note}) do
+        or UDim2.fromOffset(374,445)
+    for _,v in ipairs({infinity,autoDash,autoRun,sensitivity,testInput,status,note}) do
         v.Visible=not minimized
     end
     mini.Text=minimized and "+" or "-"
@@ -890,4 +928,4 @@ end
 track(unloadEvent.Event:Connect(cleanup))
 track(exit.MouseButton1Click:Connect(cleanup))
 paint()
-print("[Velion Gojo Infinity V2] Reference physics preserved; no network GUI dependencies.")
+print("[Velion Gojo Infinity V2.1] Native key input diagnostics. Key sent != dash accepted.")
