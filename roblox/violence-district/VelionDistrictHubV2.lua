@@ -1,5 +1,5 @@
 --[[
-    VELION DISTRICT HUB V2.0
+    VELION DISTRICT HUB V2.1 - MINI HUD EDITION
     For Roblox Violence District - client-side utility module.
     Clean, readable Luau. No external UI libraries, telemetry or extra loaders.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -10,6 +10,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Lighting = game:GetService("Lighting")
+local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
@@ -30,7 +31,8 @@ local state = {
     alive=true, playerESP=false, objectiveESP=false,
     fullbright=false, noFog=false, noClip=false,
     speed=false, speedValue=24, fov=70,
-    killerAlert=true, scanProgress="Starting",
+    killerAlert=true, offscreenESP=true, scanProgress="Starting",
+    expanded=false, activeTab="Dashboard",
     identifiedObjectives=0, unknownRoles=0,
 }
 local palette = {
@@ -81,38 +83,88 @@ local function button(parent,text,x,y,w,h)
     return item
 end
 
+-- ============================================================
+-- MINI HUD UI: collapsible, responsive, game-first overlay.
+-- No external UI library, no extra render loops for decoration.
+-- ============================================================
 local gui=create("ScreenGui",playerGui,{
     Name="VelionDistrictHubV2",ResetOnSpawn=false,
     IgnoreGuiInset=true,DisplayOrder=800
 })
 local panel=create("Frame",gui,{
-    Position=UDim2.new(.5,-230,0,75),Size=UDim2.fromOffset(460,370),
+    Name="MiniHUD",AnchorPoint=Vector2.new(1,0),
+    Position=UDim2.new(1,-18,0,76),Size=UDim2.fromOffset(310,135),
     BackgroundColor3=palette.bg,BorderSizePixel=0,
-    Active=true
+    Active=true,ClipsDescendants=true
 })
-round(panel,12)
-create("UIStroke",panel,{Color=palette.accent,Thickness=1.3})
+round(panel,13)
+local frameStroke=create("UIStroke",panel,{
+    Color=palette.accent,Thickness=1.25,Transparency=.15
+})
+local viewport=Workspace.CurrentCamera and Workspace.CurrentCamera.ViewportSize
+    or Vector2.new(1280,720)
+local uiScale=create("UIScale",panel,{
+    Scale=math.clamp(viewport.X/580,.70,1)
+})
+if viewport.X>=580 then uiScale.Scale=1 end
+
 local header=create("Frame",panel,{
-    Position=UDim2.fromOffset(0,0),Size=UDim2.fromOffset(460,42),
+    Name="DragHandle",Size=UDim2.new(1,0,0,43),
+    BackgroundColor3=palette.side,BorderSizePixel=0,Active=true
+})
+round(header,12)
+local headerBottom=create("Frame",header,{
+    Position=UDim2.new(0,0,1,-9),Size=UDim2.new(1,0,0,9),
+    BackgroundColor3=palette.side,BorderSizePixel=0
+})
+local dragHandle=create("Frame",header,{
+    Position=UDim2.fromOffset(0,0),Size=UDim2.new(1,-91,1,0),
     BackgroundTransparency=1,Active=true
 })
-local title=label(header,"VELION  |  VIOLENCE DISTRICT V2",14,6,360,30,14)
+local title=label(dragHandle,"VELION  /  DISTRICT",14,2,206,36,13)
 title.Font=Enum.Font.GothamBold
-local minimize=button(header,"-",398,8,24,25)
-local close=button(header,"X",430,8,23,25)
-local sidebar=create("Frame",panel,{
-    Position=UDim2.fromOffset(8,45),Size=UDim2.fromOffset(119,278),
+local version=label(header,"V2.1",0,0,45,43,10,palette.muted)
+version.Position=UDim2.new(1,-127,0,0)
+local minimize=button(header,"+",0,8,30,27)
+minimize.Position=UDim2.new(1,-76,0,8)
+local close=button(header,"X",0,8,29,27)
+close.Position=UDim2.new(1,-38,0,8)
+close.BackgroundColor3=Color3.fromRGB(64,35,53)
+
+local hudBody=create("Frame",panel,{
+    Position=UDim2.fromOffset(0,44),Size=UDim2.fromOffset(310,91),
+    BackgroundTransparency=1
+})
+local hudOverview=label(hudBody,"PLAYERS  --   |   OBJECTIVES  --",
+    13,3,289,20,11,palette.white)
+hudOverview.Font=Enum.Font.GothamBold
+local hudThreat=label(hudBody,"KILLER: checking teams...",
+    13,25,289,21,10,palette.muted)
+local quickESP=button(hudBody,"PLAYER ESP  OFF",13,56,137,29)
+local quickAlert=button(hudBody,"ALERT  ON",160,56,137,29)
+quickESP.TextSize=10
+quickAlert.TextSize=10
+
+local expandedBody=create("Frame",panel,{
+    Name="DashboardBody",Position=UDim2.fromOffset(0,44),
+    Size=UDim2.fromOffset(535,400),
+    BackgroundTransparency=1,Visible=false
+})
+local sidebar=create("Frame",expandedBody,{
+    Position=UDim2.fromOffset(11,9),Size=UDim2.fromOffset(132,320),
     BackgroundColor3=palette.side,BorderSizePixel=0
 })
-round(sidebar,8)
-local contents=create("Frame",panel,{
-    Position=UDim2.fromOffset(135,46),Size=UDim2.fromOffset(317,278),
+round(sidebar,10)
+local contents=create("Frame",expandedBody,{
+    Position=UDim2.fromOffset(154,9),Size=UDim2.fromOffset(369,320),
     BackgroundColor3=palette.side,BorderSizePixel=0
 })
-round(contents,8)
-local footer=label(panel,"Detection-based tools | local changes only",
-    12,330,437,27,10,palette.muted)
-local pages,nav={}
+round(contents,10)
+local footer=label(expandedBody,
+    "Detecting players and map...  |  Right Ctrl: show/hide",
+    14,338,500,31,11,palette.muted)
+
+local pages,nav={},{}
 local function makePage(name)
     local page=create("Frame",contents,{
         Name=name,Size=UDim2.fromScale(1,1),
@@ -121,45 +173,105 @@ local function makePage(name)
     pages[name]=page
     return page
 end
-local visual=makePage("Visual")
-local playerPage=makePage("Player")
+local dashboard=makePage("Dashboard")
+local visual=makePage("ESP")
+local playerPage=makePage("Movement")
 local objectivesPage=makePage("Objectives")
-local aboutPage=makePage("Info")
-local navOrder={"Visual","Player","Objectives","Info"}
+local settingsPage=makePage("Settings")
+local navOrder={"Dashboard","ESP","Movement","Objectives","Settings"}
 local function choosePage(name)
+    state.activeTab=name
     for tab,page in pairs(pages) do page.Visible=(tab==name) end
     for tab,item in pairs(nav) do
-        item.BackgroundColor3=tab==name and palette.accent or palette.surface
+        item.BackgroundColor3=tab==name and palette.accent
+            or palette.surface
+        item.TextColor3=tab==name and palette.white or palette.muted
     end
 end
 for i,name in ipairs(navOrder) do
-    local item=button(sidebar,name,8,9+(i-1)*54,103,43)
+    local item=button(sidebar,name,8,11+(i-1)*61,116,49)
+    item.TextXAlignment=Enum.TextXAlignment.Left
+    create("UIPadding",item,{PaddingLeft=UDim.new(0,12)})
     nav[name]=item
     connect(item.MouseButton1Click,function() choosePage(name) end)
 end
 local function sectionTitle(page,name)
-    local t=label(page,name,12,6,294,27,13,palette.white)
+    local t=label(page,name,14,9,340,27,14,palette.white)
     t.Font=Enum.Font.GothamBold
 end
-sectionTitle(visual,"VISUAL / ESP")
-sectionTitle(playerPage,"MOVEMENT / ALERT")
+sectionTitle(dashboard,"DASHBOARD")
+sectionTitle(visual,"VISUAL & ESP")
+sectionTitle(playerPage,"MOVEMENT")
 sectionTitle(objectivesPage,"MAP OBJECTIVES")
-sectionTitle(aboutPage,"ABOUT THIS HUB")
+sectionTitle(settingsPage,"HUD SETTINGS")
 
-local function toggle(parent,title,y,get,set)
-    local control=button(parent,title..": OFF",12,y,293,35)
+local refreshQuick=function() end
+local function toggle(parent,name,y,get,set)
+    local control=button(parent,name,13,y,342,39)
+    control.TextXAlignment=Enum.TextXAlignment.Left
+    create("UIPadding",control,{PaddingLeft=UDim.new(0,12)})
+    local indicator=label(control,"OFF",270,0,60,39,11,palette.muted)
+    indicator.TextXAlignment=Enum.TextXAlignment.Right
+    indicator.Font=Enum.Font.GothamBold
     local function redraw()
-        local on=get()
-        control.Text=title..": "..(on and "ON" or "OFF")
-        control.BackgroundColor3=on and palette.green or palette.surface
+        local active=get()
+        control.BackgroundColor3=active
+            and Color3.fromRGB(38,66,66) or palette.surface
+        indicator.Text=active and "ON" or "OFF"
+        indicator.TextColor3=active and palette.green or palette.muted
     end
     connect(control.MouseButton1Click,function()
         set(not get())
         redraw()
+        refreshQuick()
     end)
     redraw()
     return redraw
 end
+
+local function keepOnScreen()
+    local cam=Workspace.CurrentCamera
+    if not cam then return end
+    local vw,vh=cam.ViewportSize.X,cam.ViewportSize.Y
+    local width=(state.expanded and 535 or 310)*uiScale.Scale
+    local right=panel.AbsolutePosition.X+panel.AbsoluteSize.X
+    if right<=0 then right=vw-18 end
+    right=math.clamp(right,math.min(width+6,vw-7),vw-7)
+    local top=math.clamp(panel.AbsolutePosition.Y,6,math.max(6,vh-44))
+    panel.Position=UDim2.fromOffset(right,top)
+end
+local activeTween=nil
+local function setExpanded(open)
+    if activeTween then activeTween:Cancel() end
+    state.expanded=open
+    hudBody.Visible=not open
+    expandedBody.Visible=open
+    minimize.Text=open and "-" or "+"
+    title.Text=open and "VELION  /  VIOLENCE DISTRICT"
+        or "VELION  /  DISTRICT"
+    local newSize=open and UDim2.fromOffset(535,444)
+        or UDim2.fromOffset(310,135)
+    activeTween=TweenService:Create(panel,
+        TweenInfo.new(.16,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
+        {Size=newSize}
+    )
+    activeTween:Play()
+    -- Keep the expanded window on-screen when switching sizes.
+    task.defer(keepOnScreen)
+end
+connect(minimize.MouseButton1Click,function()
+    setExpanded(not state.expanded)
+end)
+
+local restore=button(gui,"V",0,0,38,35)
+restore.Position=UDim2.new(1,-52,0,77)
+restore.Visible=false
+restore.BackgroundColor3=palette.accent
+connect(restore.MouseButton1Click,function()
+    panel.Visible=true
+    restore.Visible=false
+end)
+
 
 local lightingOriginal={
     Brightness=Lighting.Brightness,ClockTime=Lighting.ClockTime,
@@ -313,7 +425,8 @@ local function ensurePlayerVisual(other)
         ..(mask and ("\nMask: "..mask) or "")
         ..(status and ("\n"..status) or "")
     local cam=Workspace.CurrentCamera
-    if not cam or (not isChased and role~="Killer") or not targetRoot then
+    if not cam or not state.offscreenESP or
+        (not isChased and role~="Killer") or not targetRoot then
         existing.pointer.Visible=false
     else
         local pos,onScreen=cam:WorldToViewportPoint(targetRoot.Position)
@@ -509,72 +622,150 @@ local function setSpeed(value)
     end
 end
 
--- Visual
-toggle(visual,"PLAYER ESP",41,
+-- ============================================================
+-- MENU CONTROLS (all wired to the existing V2 game systems)
+-- ============================================================
+local refreshPlayerESP=toggle(visual,"Player ESP",45,
     function() return state.playerESP end,
-    function(v)
-        state.playerESP=v
-        if not v then
+    function(value)
+        state.playerESP=value
+        if not value then
             for other in pairs(playerVisuals) do removePlayerVisual(other) end
         end
     end)
-toggle(visual,"OBJECTIVE ESP",83,
+local refreshObjectiveESP=toggle(visual,"Objective ESP",90,
     function() return state.objectiveESP end,
-    function(v) state.objectiveESP=v;refreshObjectiveVisibility() end)
-toggle(visual,"FULLBRIGHT",125,
+    function(value)
+        state.objectiveESP=value
+        refreshObjectiveVisibility()
+    end)
+toggle(visual,"Fullbright",135,
     function() return state.fullbright end,
-    function(v) state.fullbright=v;updateLighting() end)
-toggle(visual,"NO FOG",167,
+    function(value) state.fullbright=value;updateLighting() end)
+toggle(visual,"No Fog",180,
     function() return state.noFog end,
-    function(v) state.noFog=v;updateLighting() end)
-local fovButton=button(visual,"CAMERA FOV: 70",12,209,293,35)
+    function(value) state.noFog=value;updateLighting() end)
+local fovButton=button(visual,"Camera FOV: 70",13,225,342,39)
 connect(fovButton.MouseButton1Click,function()
-    local nextValues={[70]=85,[85]=100,[100]=70}
-    state.fov=nextValues[state.fov] or 70
-    fovButton.Text="CAMERA FOV: "..state.fov
+    local values={[70]=85,[85]=100,[100]=70}
+    state.fov=values[state.fov] or 70
+    fovButton.Text="Camera FOV: "..state.fov
     cameraFov()
 end)
 
--- Player
-toggle(playerPage,"NOCLIP",41,
+-- Movement and role alerts
+toggle(playerPage,"NoClip",45,
     function() return state.noClip end,setNoClip)
-local speedToggle=toggle(playerPage,"SPEED ASSIST",83,
+toggle(playerPage,"Speed Assist",90,
     function() return state.speed end,setSpeed)
-local speedButton=button(playerPage,"SPEED VALUE: 24",12,125,293,35)
+local speedButton=button(playerPage,"Speed Value: 24",13,135,342,39)
 connect(speedButton.MouseButton1Click,function()
     local values={[24]=28,[28]=32,[32]=20,[20]=24}
     state.speedValue=values[state.speedValue] or 24
-    speedButton.Text="SPEED VALUE: "..state.speedValue
+    speedButton.Text="Speed Value: "..state.speedValue
 end)
-toggle(playerPage,"KILLER PROXIMITY ALERT",167,
+local refreshAlert=toggle(playerPage,"Killer Proximity Alert",180,
     function() return state.killerAlert end,
-    function(v) state.killerAlert=v end)
-local roleHint=label(playerPage,
-    "Role alert uses visible player attributes or team data.\n"
-    .."Unknown roles are never automatically labeled Killer.",
-    12,208,292,55,11,palette.muted)
+    function(value) state.killerAlert=value end)
+toggle(playerPage,"Off-screen ESP Indicators",225,
+    function() return state.offscreenESP end,
+    function(value) state.offscreenESP=value end)
 
--- Objectives
-local refreshButton=button(objectivesPage,"REFRESH OBJECTIVES",12,43,293,38)
+-- Dashboard summary + actionable quick settings
+local homeCounts=label(dashboard,"0 players   |   0 objectives",
+    15,52,341,42,17,palette.white)
+homeCounts.Font=Enum.Font.GothamBold
+local homeKiller=label(dashboard,"Killer: not detected",
+    15,98,341,29,12,palette.muted)
+local homeSkill=label(dashboard,"Skill Check: inactive",
+    15,128,341,45,11,palette.muted)
+local dashboardESP=toggle(dashboard,"Player ESP",184,
+    function() return state.playerESP end,
+    function(value)
+        state.playerESP=value
+        if not value then
+            for other in pairs(playerVisuals) do removePlayerVisual(other) end
+        end
+        refreshPlayerESP()
+    end)
+local dashboardObjectives=toggle(dashboard,"Objective ESP",230,
+    function() return state.objectiveESP end,
+    function(value)
+        state.objectiveESP=value
+        refreshObjectiveVisibility()
+        refreshObjectiveESP()
+    end)
+local dashboardExtras=button(dashboard,"OPEN MAP OBJECTIVES",13,275,342,31)
+connect(dashboardExtras.MouseButton1Click,function()
+    choosePage("Objectives")
+end)
+
+-- Objectives: live scanner, generator progress ESP and skill-check monitor
+local refreshButton=button(objectivesPage,"REFRESH MAP OBJECTIVES",13,45,342,39)
 connect(refreshButton.MouseButton1Click,startObjectiveScan)
-local objectiveInfo=label(objectivesPage,"Scanning map...",12,94,292,139,12,palette.muted)
+local objectiveInfo=label(objectivesPage,"Scanning Workspace.Map...",
+    15,98,339,104,12,palette.muted)
 local skillInfo=label(objectivesPage,
     "Skill Check: waiting for SkillCheckPromptGui",
-    12,230,295,43,10,palette.muted)
+    15,211,339,88,11,palette.muted)
 
--- Info
-label(aboutPage,
-    "VELION DISTRICT HUB V2.0\n\n"
-    .."Implemented: Player ESP, objective markers, Fullbright,\n"
-    .."No Fog, camera FOV, NoClip, speed assist,\n"
-    .."Killer proximity warning, mask/chase indicators,\n"
-    .."repair percentage and skill-check monitor.\n\n"
-    .."Skill Check is OBSERVATION only. Not included:\n"
-    .."server immunity, auto generator,\n"
-    .."auto parry or unverified game remotes.\n\n"
-    .."RightControl: show/hide GUI\n"
-    .."Close (X): restore settings and disconnect.",
-    13,42,293,218,12,palette.muted)
+-- Settings are real working actions; no decorative fake switches
+local scaleButton=button(settingsPage,"HUD SCALE: 100%",13,45,342,40)
+local scaleSteps={1,.90,.80}
+local scaleIndex=1
+connect(scaleButton.MouseButton1Click,function()
+    scaleIndex=scaleIndex%#scaleSteps+1
+    local cam=Workspace.CurrentCamera
+    local responsive=cam and math.clamp(cam.ViewportSize.X/580,.70,1)
+        or 1
+    if cam and cam.ViewportSize.X>=580 then responsive=1 end
+    uiScale.Scale=scaleSteps[scaleIndex]*responsive
+    scaleButton.Text="HUD SCALE: "..math.floor(scaleSteps[scaleIndex]*100).."%"
+    task.defer(keepOnScreen)
+end)
+local resetButton=button(settingsPage,"RESET HUD POSITION",13,93,342,40)
+connect(resetButton.MouseButton1Click,function()
+    panel.Position=UDim2.new(1,-18,0,76)
+    task.defer(keepOnScreen)
+end)
+local scanButton=button(settingsPage,"RESCAN MAP",13,141,342,40)
+connect(scanButton.MouseButton1Click,startObjectiveScan)
+local collapseButton=button(settingsPage,"RETURN TO MINI HUD",13,189,342,40)
+connect(collapseButton.MouseButton1Click,function()
+    setExpanded(false)
+end)
+label(settingsPage,
+    "Right Ctrl: hide / show  |  Close: restore settings\n"
+    .."HUD defaults to compact mode. No external GUI assets.",
+    15,240,337,64,11,palette.muted)
+
+refreshQuick=function()
+    quickESP.Text="PLAYER ESP  "..(state.playerESP and "ON" or "OFF")
+    quickESP.BackgroundColor3=state.playerESP
+        and Color3.fromRGB(38,66,66) or palette.surface
+    quickAlert.Text="ALERT  "..(state.killerAlert and "ON" or "OFF")
+    quickAlert.BackgroundColor3=state.killerAlert
+        and Color3.fromRGB(38,66,66) or palette.surface
+    refreshPlayerESP()
+    refreshObjectiveESP()
+    refreshAlert()
+    dashboardESP()
+    dashboardObjectives()
+end
+connect(quickESP.MouseButton1Click,function()
+    state.playerESP=not state.playerESP
+    if not state.playerESP then
+        for other in pairs(playerVisuals) do removePlayerVisual(other) end
+    end
+    refreshQuick()
+end)
+connect(quickAlert.MouseButton1Click,function()
+    state.killerAlert=not state.killerAlert
+    refreshQuick()
+end)
+refreshQuick()
+choosePage("Dashboard")
+
 
 local alert=label(gui,"",0,0,460,40,16,palette.red)
 alert.Font=Enum.Font.GothamBold
@@ -660,8 +851,24 @@ connect(RunService.Heartbeat,function(dt)
     refreshObjectiveVisibility()
     local hum=char and char:FindFirstChildOfClass("Humanoid")
     local speedState=hum and string.format(" | Speed %.0f",hum.WalkSpeed) or ""
-    footer.Text="Players: "..#Players:GetPlayers()..
-        " | Objectives: "..state.identifiedObjectives..speedState
+    local totalPlayers=#Players:GetPlayers()
+    footer.Text="PLAYERS  "..totalPlayers.."     OBJECTIVES  "
+        ..state.identifiedObjectives..speedState
+        .."     |     RIGHT CTRL: HIDE"
+    hudOverview.Text=string.format("PLAYERS  %d   |   OBJECTIVES  %d",
+        totalPlayers,state.identifiedObjectives)
+    hudThreat.Text=closestKiller<99 and state.killerAlert
+        and string.format("KILLER NEARBY  -  %d studs",
+            math.floor(closestKiller))
+        or (state.killerAlert and "KILLER STATUS  -  CLEAR / UNKNOWN"
+            or "KILLER ALERT  -  OFF")
+    hudThreat.TextColor=(closestKiller<99 and state.killerAlert)
+        and palette.red or palette.muted
+    homeCounts.Text=string.format("%d PLAYERS   /   %d OBJECTIVES",
+        totalPlayers,state.identifiedObjectives)
+    homeKiller.Text=hudThreat.Text
+    homeKiller.TextColor=hudThreat.TextColor
+    homeSkill.Text=checkSkillUi()
 end)
 
 connect(Players.PlayerRemoving,removePlayerVisual)
@@ -674,45 +881,49 @@ connect(Workspace:GetPropertyChangedSignal("CurrentCamera"),function()
     if state.alive then cameraFov() end
 end)
 
+-- Drag only from the title area, keeping close/expand buttons reliable.
 local dragging=false
-local dragStart,frameStart
-connect(header.InputBegan,function(input)
-    if input.UserInputType==Enum.UserInputType.MouseButton1 then
+local dragStart,frameStart,dragInput
+connect(dragHandle.InputBegan,function(input)
+    if input.UserInputType==Enum.UserInputType.MouseButton1
+        or input.UserInputType==Enum.UserInputType.Touch then
         dragging=true
+        dragInput=input
         dragStart=input.Position
         frameStart=panel.Position
     end
 end)
 connect(UserInputService.InputChanged,function(input)
-    if dragging and input.UserInputType==Enum.UserInputType.MouseMovement then
-        local diff=input.Position-dragStart
-        panel.Position=UDim2.new(frameStart.X.Scale,frameStart.X.Offset+diff.X,
-            frameStart.Y.Scale,frameStart.Y.Offset+diff.Y)
+    if not dragging then return end
+    if input==dragInput or input.UserInputType==Enum.UserInputType.MouseMovement then
+        local delta=input.Position-dragStart
+        local x=frameStart.X.Scale
+        local y=frameStart.Y.Scale
+        panel.Position=UDim2.new(x,frameStart.X.Offset+delta.X,
+            y,frameStart.Y.Offset+delta.Y)
     end
 end)
 connect(UserInputService.InputEnded,function(input)
-    if input.UserInputType==Enum.UserInputType.MouseButton1 then dragging=false end
+    if input==dragInput or
+        input.UserInputType==Enum.UserInputType.MouseButton1 then
+        dragging=false
+        dragInput=nil
+        task.defer(keepOnScreen)
+    end
 end)
 connect(UserInputService.InputBegan,function(input,processed)
     if not processed and input.KeyCode==Enum.KeyCode.RightControl then
         panel.Visible=not panel.Visible
+        restore.Visible=not panel.Visible
     end
 end)
-local minimized=false
-connect(minimize.MouseButton1Click,function()
-    minimized=not minimized
-    sidebar.Visible=not minimized
-    contents.Visible=not minimized
-    footer.Visible=not minimized
-    panel.Size=minimized and UDim2.fromOffset(460,42)
-        or UDim2.fromOffset(460,370)
-    minimize.Text=minimized and "+" or "-"
-end)
+
 
 local function cleanup()
     if not state.alive then return end
     state.alive=false
     scanGeneration+=1
+    if activeTween then activeTween:Cancel() end
     for _,connection in ipairs(connections) do
         pcall(function() connection:Disconnect() end)
     end
@@ -738,4 +949,4 @@ environment.VelionVDCleanup=cleanup
 connect(close.MouseButton1Click,cleanup)
 choosePage("Visual")
 startObjectiveScan()
-print("[Velion VD V2.0] Integrated game-specific paths and attributes from reference. Not tested in live game.")
+print("[Velion VD V2.1 Mini HUD] Source loaded. UI opens compact; toggle + for dashboard. Gameplay not yet verified.")
