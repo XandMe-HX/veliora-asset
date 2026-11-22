@@ -173,8 +173,11 @@ local function updateLighting()
         or lightingOriginal.Ambient
     Lighting.OutdoorAmbient=state.fullbright and Color3.fromRGB(235,235,235)
         or lightingOriginal.OutdoorAmbient
-    Lighting.GlobalShadows=state.fullbright and false
-        or lightingOriginal.GlobalShadows
+    if state.fullbright then
+        Lighting.GlobalShadows=false
+    else
+        Lighting.GlobalShadows=lightingOriginal.GlobalShadows
+    end
     Lighting.FogEnd=state.noFog and 100000 or lightingOriginal.FogEnd
     Lighting.FogStart=state.noFog and 0 or lightingOriginal.FogStart
     for _,child in ipairs(Lighting:GetChildren()) do
@@ -195,14 +198,19 @@ end
 local playerVisuals={}
 local objectiveVisuals={}
 local originalsCollision=setmetatable({}, {__mode="k"})
+local originalWalkSpeed=setmetatable({}, {__mode="k"})
 local originalFOV=Workspace.CurrentCamera and Workspace.CurrentCamera.FieldOfView or 70
 local function roleOf(other)
     local character=other.Character
+    -- Convert missing attributes to empty strings: ipairs would otherwise
+    -- stop at the first nil and skip real Team/character attributes.
     local fields={
-        other:GetAttribute("Role"),other:GetAttribute("role"),
-        other:GetAttribute("Team"),other:GetAttribute("TeamRole"),
-        character and character:GetAttribute("Role"),
-        other.Team and other.Team.Name
+        tostring(other:GetAttribute("Role") or ""),
+        tostring(other:GetAttribute("role") or ""),
+        tostring(other:GetAttribute("Team") or ""),
+        tostring(other:GetAttribute("TeamRole") or ""),
+        tostring(character and character:GetAttribute("Role") or ""),
+        tostring(other.Team and other.Team.Name or "")
     }
     for _,value in ipairs(fields) do
         local s=tostring(value or ""):lower()
@@ -286,16 +294,23 @@ local function classify(candidate)
     return nil
 end
 local function resolveObjective(candidate,kind)
-    local model=candidate:IsA("Model") and candidate
-        or candidate:FindFirstAncestorOfClass("Model")
-    if model and model==player.Character then return nil,nil end
-    if model then
-        local base=model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart",true)
-        if base then return model,base end
+    -- Prefer the actual named object instead of its possibly huge Map model.
+    if candidate:IsA("Model") then
+        local base=candidate.PrimaryPart
+            or candidate:FindFirstChildWhichIsA("BasePart",true)
+        if base then return candidate,base end
+    elseif candidate:IsA("BasePart") then
+        local parent=candidate.Parent
+        if parent and parent:IsA("Model") and classify(parent) then
+            return parent,parent.PrimaryPart or candidate
+        end
+        return candidate,candidate
+    elseif candidate:IsA("ProximityPrompt") then
+        local parent=candidate.Parent
+        if parent and parent:IsA("BasePart") then
+            return parent,parent
+        end
     end
-    if candidate:IsA("BasePart") then return candidate,candidate end
-    local parent=candidate.Parent
-    if parent and parent:IsA("BasePart") then return parent,parent end
     return nil,nil
 end
 local function considerObjective(candidate)
@@ -384,8 +399,13 @@ local function updateSpeed()
     if not state.speed then return end
     local character=player.Character
     local hum=character and character:FindFirstChildOfClass("Humanoid")
-    if hum and hum.Health>0 and hum.WalkSpeed~=state.speedValue then
-        hum.WalkSpeed=state.speedValue
+    if hum and hum.Health>0 then
+        if originalWalkSpeed[hum]==nil then
+            originalWalkSpeed[hum]=hum.WalkSpeed
+        end
+        if hum.WalkSpeed~=state.speedValue then
+            hum.WalkSpeed=state.speedValue
+        end
     end
 end
 local function cameraFov()
@@ -395,8 +415,12 @@ end
 local function setSpeed(value)
     state.speed=value
     if not value then
-        local hum=player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-        if hum then hum.WalkSpeed=16 end
+        for hum,original in pairs(originalWalkSpeed) do
+            if hum.Parent then
+                pcall(function() hum.WalkSpeed=original end)
+            end
+            originalWalkSpeed[hum]=nil
+        end
     end
 end
 
