@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V4.1 - WORLD ESP V2
+    VELION DISTRICT HUB V4.2 - FLUENT GAME TRACKING
     For Roblox Violence District - client-side utility module.
     Game UI uses upstream Fluent; the World ESP engine is local code.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -36,13 +36,19 @@ local state = {
     killerAlert=true, offscreenESP=true, hidden=false, scanProgress="Starting",
     expanded=true, activeTab="Home", sceneBlur=false,
     killerESP=true, survivorESP=true, unknownESP=false,
-    survivorItemsESP=false, playerNames=true, playerDistance=true,
+    survivorItemsESP=true, worldItemsESP=true,
+    abilityNotify=true, roleTracking=true,
+    playerNames=true, playerDistance=true,
     playerMask=true, chaseStatus=true, knockedStatus=true, hookedStatus=true,
     playerHighlight=true, objectHighlight=true, highlightMode="Outline", nextKiller=true, skillMonitor=true,
     autoSkillCheck=false, inputStatus="No action attempted",
     generatorESP=true, palletESP=true, windowESP=true, hookESP=true,
     gateESP=true, generatorProgressESP=true, espDistance=650,
     identifiedObjectives=0, unknownRoles=0,
+    progressScale="Auto", progressUnknown=0,
+    worldItemsFound=0, scanMapCount=0, scanInteractableCount=0,
+    abilityStatus="Waiting for replicated ability signals",
+    roleTransitions=0, trackedPlayers=0,
     maxWorldLabels=22, maxWorldHighlights=20, objectLabels=true,
     scanCandidates=0, scanScanned=0, scanDurationMs=0,
     visibleLabels=0, visibleHighlights=0, fps=60,
@@ -118,6 +124,7 @@ local espColors={
     Knocked=Color3.fromRGB(244,199,78),
     Hooked=Color3.fromRGB(255,134,195),
     Unknown=Color3.fromRGB(184,180,205),
+    Item=Color3.fromRGB(246,213,104),
 }
 local function highlightStyle(h: Highlight,color: Color3)
     h.FillColor=color
@@ -131,6 +138,7 @@ local function categoryName(key: string): string
     if key=="window" then return "Window" end
     if key=="hook" then return "Hook" end
     if key=="gate" then return "Gate" end
+    if key=="item" then return "Item" end
     return "Unknown"
 end
 local function categoryColor(key: string): Color3
@@ -181,7 +189,7 @@ local uiHeight=math.min(490,math.max(320,cameraSize.Y-80))
 local createdWindow,Window=pcall(function()
     return Fluent:CreateWindow({
         Title="VELION | VIOLENCE DISTRICT",
-        SubTitle="V4.1 / World ESP V2",
+        SubTitle="V4.2 / Game Tracking",
         TabWidth=cameraSize.X<500 and 116 or 150,
         Size=UDim2.fromOffset(uiWidth,uiHeight),
         Acrylic=true,Theme="Dark",
@@ -448,6 +456,8 @@ end
 -- WORLD ESP V2: map-only discovery, lazy rendering and strict visibility caps.
 -- High-instance-count lobby objects, cosmetic preview models and fake
 -- characters are deliberately excluded by the Workspace.Map scope.
+-- V4.2 World ESP: two verified Workspace scopes (Map + Interactables).
+-- No full Workspace scans, preview-model targeting or arbitrary 90-object cap.
 local objectiveKinds={
     {name="Generator",key="generator",priority=145},
     {name="ExitGate",key="gate",priority=115},
@@ -455,28 +465,61 @@ local objectiveKinds={
     {name="Hook",key="hook",priority=80},
     {name="Palletwrong",key="pallet",priority=55},
     {name="Pallet",key="pallet",priority=55},
-    {name="Window",key="window",priority=18}
+    {name="Window",key="window",priority=18},
+    {name="Medkit",key="item",priority=65},
+    {name="Bandage",key="item",priority=65},
+    {name="Flashlight",key="item",priority=65},
+    {name="Battery",key="item",priority=65},
+    {name="Item",key="item",priority=65},
+    {name="Pickup",key="item",priority=65},
 }
 local currentMap: Instance?=nil
+local activeInteractables: Instance?=nil
+local sourceConnections: {RBXScriptConnection}={}
 local scanGeneration=0
 local lastObjectiveRefresh=0
+local cachedNameKinds={}
+for _,kind in ipairs(objectiveKinds) do
+    cachedNameKinds[kind.name:lower()]=kind
+end
+local itemKind={name="ITEM",key="item",priority=65}
+local repairKind=cachedNameKinds.generator
+local windowKind=cachedNameKinds.window
 
-local function objectiveEnabled(kind: string): boolean
-    if kind=="generator" then return state.generatorESP end
-    if kind=="pallet" then return state.palletESP end
-    if kind=="window" then return state.windowESP end
-    if kind=="hook" then return state.hookESP end
-    if kind=="gate" then return state.gateESP end
+local function objectiveEnabled(key: string): boolean
+    if key=="generator" then return state.generatorESP end
+    if key=="pallet" then return state.palletESP end
+    if key=="window" then return state.windowESP end
+    if key=="hook" then return state.hookESP end
+    if key=="gate" then return state.gateESP end
+    if key=="item" then return state.worldItemsESP end
     return false
 end
-
--- Accept exact objective names and optional numeric suffixes only.
--- 'WindowFrame', 'Gatehouse' and other decorative names do not qualify.
-local function classifyObjective(candidate: Instance)
-    if not candidate:IsA("Model") and not candidate:IsA("BasePart") then
-        return nil
+local function inScope(item: Instance): boolean
+    local root: Instance?=nil
+    if currentMap and item:IsDescendantOf(currentMap) then
+        root=currentMap
+    elseif activeInteractables and item:IsDescendantOf(activeInteractables) then
+        root=activeInteractables
     end
-    local canonical=candidate.Name:lower():gsub("[%s_%-]","")
+    if not root then return false end
+    local node=item
+    while node and node~=root do
+        local lower=node.Name:lower()
+        if lower:find("lobby",1,true)
+            or lower:find("preview",1,true)
+            or lower:find("fakecharacter",1,true) then
+            return false
+        end
+        node=node.Parent
+    end
+    return true
+end
+local function classifyNamed(item: Instance)
+    if not item:IsA("Model") and not item:IsA("BasePart")
+        and not item:IsA("Tool") then return nil end
+    if item:IsA("Tool") then return itemKind end
+    local canonical=item.Name:lower():gsub("[%s_%-]","")
     for _,kind in ipairs(objectiveKinds) do
         local target=kind.name:lower()
         if canonical==target or canonical:match("^"..target.."%d+$") then
@@ -485,25 +528,60 @@ local function classifyObjective(candidate: Instance)
     end
     return nil
 end
-
-local function locateObjective(candidate: Instance)
-    local kind=classifyObjective(candidate)
-    if not kind then return nil,nil,nil end
-    if not currentMap or not candidate:IsDescendantOf(currentMap) then
-        return nil,nil,nil
+local function promptKind(item: Instance)
+    if not item:IsA("ProximityPrompt") then return nil end
+    local action=item.ActionText:lower()
+    if action:find("repair",1,true) then return repairKind end
+    if action:find("vault",1,true) then return windowKind end
+    if action:find("pick up",1,true) or action:find("pickup",1,true)
+        or action:find("collect",1,true) or action=="take" then
+        return itemKind
     end
-    -- Prefer the named Model over its nested parts to avoid duplicate markers.
-    if candidate:IsA("BasePart") then
-        local parent=candidate.Parent
-        if parent and parent:IsA("Model") and classifyObjective(parent) then
+    return nil
+end
+local function getObjective(item: Instance)
+    if not inScope(item) then return nil,nil,nil end
+    local kind=classifyNamed(item)
+    local original=item
+    if item:IsA("ProximityPrompt") then
+        kind=promptKind(item)
+        if not kind then return nil,nil,nil end
+        -- Resolve to a useful nearby model/part, not Map or Interactables.
+        local parent=item.Parent
+        if not parent then return nil,nil,nil end
+        local model=parent:IsA("Model") and parent
+            or parent:FindFirstAncestorOfClass("Model")
+        if model and model~=currentMap and model~=activeInteractables
+            and inScope(model) then
+            item=model
+        elseif parent:IsA("BasePart") then
+            item=parent
+        else
             return nil,nil,nil
         end
-        return candidate,candidate,kind
     end
-    local model=candidate :: Model
-    local part=model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart",true)
-    if part then return model,part,kind end
-    return nil,nil,nil
+    if not kind then return nil,nil,nil end
+    -- Model gets one marker even when its nested part shares the same name.
+    if original:IsA("BasePart") then
+        local parent=original.Parent
+        if parent and parent:IsA("Model") and classifyNamed(parent)
+            and inScope(parent) then
+            return nil,nil,nil
+        end
+    end
+    local part: BasePart?=nil
+    if item:IsA("BasePart") then
+        part=item
+    elseif item:IsA("Model") then
+        part=item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart",true)
+    elseif item:IsA("Tool") then
+        part=item:FindFirstChild("Handle")
+        if not part or not part:IsA("BasePart") then
+            part=item:FindFirstChildWhichIsA("BasePart")
+        end
+    end
+    if not part then return nil,nil,nil end
+    return item,part,kind
 end
 
 local function destroyObjectiveNodes(record)
@@ -512,9 +590,9 @@ local function destroyObjectiveNodes(record)
     record.text=nil
 end
 local function removeObjectiveRecord(obj: Instance)
-    local record=objectiveVisuals[obj]
-    if not record then return end
-    destroyObjectiveNodes(record)
+    local rec=objectiveVisuals[obj]
+    if not rec then return end
+    destroyObjectiveNodes(rec)
     objectiveVisuals[obj]=nil
     state.identifiedObjectives=math.max(0,state.identifiedObjectives-1)
 end
@@ -523,145 +601,164 @@ local function clearObjectives()
     state.identifiedObjectives=0
     state.visibleLabels=0
     state.visibleHighlights=0
+    state.worldItemsFound=0
 end
-
 local function considerObjective(candidate: Instance)
     if not state.alive or not candidate.Parent then return end
-    local obj,part,kind=locateObjective(candidate)
-    if not obj or not part or not kind or objectiveVisuals[obj] then return end
+    local obj,part,kind=getObjective(candidate)
+    if not obj or not part or not kind then return end
+    if objectiveVisuals[obj] then return end
     objectiveVisuals[obj]={
-        obj=obj,part=part,kind=kind,
-        gui=nil,highlight=nil,text=nil,lastVisible=0
+        obj=obj,part=part,kind=kind,gui=nil,
+        highlight=nil,text=nil,lastVisible=0,
+        progressRef=nil,progressMaxRef=nil
     }
     state.identifiedObjectives+=1
+    if kind.key=="item" then state.worldItemsFound+=1 end
 end
-
-local function makeObjectiveNodes(record)
-    if not record.gui then
-        local billboard=create("BillboardGui",playerGui,{
-            Name="VelionVDObjective",
-            Adornee=record.part,
-            Size=UDim2.fromOffset(158,29),
-            StudsOffsetWorldSpace=Vector3.new(0,3.0,0),
-            AlwaysOnTop=true,Enabled=false,
-            MaxDistance=state.espDistance
+local function makeObjectiveNodes(rec)
+    if not rec.gui then
+        local board=create("BillboardGui",playerGui,{
+            Name="VelionVDObjective",Adornee=rec.part,
+            Size=UDim2.fromOffset(160,30),AlwaysOnTop=true,
+            Enabled=false,MaxDistance=state.espDistance,
+            StudsOffsetWorldSpace=Vector3.new(0,3,0)
         })
-        local tag=label(billboard,record.kind.name:upper(),
-            0,0,158,29,12,categoryColor(record.kind.key))
+        local tag=label(board,rec.kind.name:upper(),
+            0,0,160,30,12,categoryColor(rec.kind.key))
         tag.TextXAlignment=Enum.TextXAlignment.Center
         tag.TextStrokeTransparency=.25
-        record.gui=billboard
-        record.text=tag
+        rec.gui=board
+        rec.text=tag
     end
-    if state.objectHighlight and not record.highlight then
-        record.highlight=create("Highlight",Workspace,{
-            Name="VelionVDObjectiveOutline",
-            Adornee=record.obj,
-            Enabled=false,
-            DepthMode=Enum.HighlightDepthMode.AlwaysOnTop,
+    if state.objectHighlight and not rec.highlight then
+        rec.highlight=create("Highlight",Workspace,{
+            Name="VelionVDObjectiveOutline",Adornee=rec.obj,
+            Enabled=false,DepthMode=Enum.HighlightDepthMode.AlwaysOnTop,
             FillTransparency=1,OutlineTransparency=0,
-            FillColor=categoryColor(record.kind.key),
-            OutlineColor=categoryColor(record.kind.key)
+            FillColor=categoryColor(rec.kind.key),
+            OutlineColor=categoryColor(rec.kind.key)
         })
     end
 end
 
-local function numericValue(target: Instance?, name: string)
+local function asNumber(target: Instance?,field: string): number?
     if not target then return nil end
-    local raw=gameValue(target,name)
+    local raw=gameValue(target,field)
     if type(raw)=="number" then return raw end
     return nil
 end
-local function generatorProgress(record)
-    local obj=record.obj
-    local part=record.part
-    local progress=numericValue(obj,"RepairProgress")
-        or numericValue(obj,"Progress")
-        or numericValue(part,"RepairProgress")
-        or numericValue(part,"Progress")
-    -- Some models store the value in a nested ValueBase: this fallback is
-    -- performed only for the small number of actively rendered generators.
+-- Only sample plausible progress fields, not arbitrary "Progress" GUI text.
+-- A missing maximum for 0 < x < 1 is intentionally not guessed as percent.
+local function generatorProgress(rec): string
+    local obj=rec.obj
+    local part=rec.part
+    local progress=asNumber(obj,"RepairProgress")
+        or asNumber(obj,"Progress")
+        or asNumber(part,"RepairProgress")
+        or asNumber(part,"Progress")
+    local maxValue=asNumber(obj,"MaxRepairProgress")
+        or asNumber(obj,"MaxProgress")
+        or asNumber(part,"MaxRepairProgress")
+        or asNumber(part,"MaxProgress")
     if progress==nil and obj:IsA("Model") then
-        local child=obj:FindFirstChild("RepairProgress",true)
-            or obj:FindFirstChild("Progress",true)
-        if child and child:IsA("ValueBase") and type(child.Value)=="number" then
-            progress=child.Value
+        if not rec.progressRef or not rec.progressRef.Parent then
+            rec.progressRef=obj:FindFirstChild("RepairProgress",true)
+                or obj:FindFirstChild("Progress",true)
+        end
+        local node=rec.progressRef
+        if node and node:IsA("ValueBase") and type(node.Value)=="number" then
+            progress=node.Value
         end
     end
-    if type(progress)~="number" then return "GEN • progress unknown" end
-    local maximum=numericValue(obj,"MaxRepairProgress")
-        or numericValue(obj,"MaxProgress")
-        or numericValue(part,"MaxProgress")
-    if maximum and maximum>0 then
-        return string.format("GEN %.0f%%",math.clamp(progress/maximum*100,0,100))
+    if not maxValue and obj:IsA("Model") then
+        if not rec.progressMaxRef or not rec.progressMaxRef.Parent then
+            rec.progressMaxRef=obj:FindFirstChild("MaxRepairProgress",true)
+                or obj:FindFirstChild("MaxProgress",true)
+        end
+        local node=rec.progressMaxRef
+        if node and node:IsA("ValueBase") and type(node.Value)=="number" then
+            maxValue=node.Value
+        end
     end
-    if progress==0 or (progress>=1 and progress<=100) then
-        return string.format("GEN %.0f%%",math.clamp(progress,0,100))
+    if type(progress)~="number" then
+        state.progressUnknown+=1
+        return "GEN • progress unavailable"
     end
-    -- A 0..1 value without its scale must not be mislabeled as a percent.
+    local value: number?=nil
+    if maxValue and maxValue>0 then
+        value=progress/maxValue*100
+    elseif state.progressScale=="Fraction" then
+        value=progress*100
+    elseif state.progressScale=="Percent" then
+        value=progress
+    elseif state.progressScale=="Auto" then
+        if progress==0 or (progress>=1 and progress<=100) then
+            value=progress
+        end
+    end
+    if value then
+        return string.format("GEN %.0f%%",math.clamp(value,0,100))
+    end
+    state.progressUnknown+=1
     return string.format("GEN %.2f (raw)",progress)
 end
 
 local function refreshObjectiveVisibility()
     local now=os.clock()
-    if now-lastObjectiveRefresh<.30 then return end
+    if now-lastObjectiveRefresh<.3 then return end
     lastObjectiveRefresh=now
-    local camera=Workspace.CurrentCamera
+    local cam=Workspace.CurrentCamera
     local root=player.Character and
         player.Character:FindFirstChild("HumanoidRootPart")
     local candidates={}
-    local count=0
-    for obj,record in pairs(objectiveVisuals) do
-        if not currentMap or not obj.Parent or not record.part.Parent
-            or not obj:IsDescendantOf(currentMap) then
+    local cacheCount=0
+    for obj,rec in pairs(objectiveVisuals) do
+        if not obj.Parent or not rec.part.Parent or not inScope(obj) then
             removeObjectiveRecord(obj)
         else
-            count+=1
-            if record.gui then record.gui.Enabled=false end
-            if record.highlight then record.highlight.Enabled=false end
-            if state.objectiveESP and objectiveEnabled(record.kind.key)
-                and root and camera then
-                local dist=(root.Position-record.part.Position).Magnitude
-                if dist<=state.espDistance then
-                    local pos,onScreen=camera:WorldToViewportPoint(
-                        record.part.Position)
+            cacheCount+=1
+            if rec.gui then rec.gui.Enabled=false end
+            if rec.highlight then rec.highlight.Enabled=false end
+            if state.objectiveESP and objectiveEnabled(rec.kind.key)
+                and root and cam then
+                local d=(root.Position-rec.part.Position).Magnitude
+                if d<=state.espDistance then
+                    local pos,onScreen=cam:WorldToViewportPoint(
+                        rec.part.Position)
                     if onScreen and pos.Z>0 then
-                        -- Prioritize close objectives while favoring vital
-                        -- generators/gates over common windows.
-                        table.insert(candidates,{
-                            record=record,dist=dist,pos=pos,
-                            score=dist-record.kind.priority
-                        })
+                        candidates[#candidates+1]={
+                            rec=rec,dist=d,pos=pos,
+                            priority=d-rec.kind.priority
+                        }
                     end
                 end
             end
         end
     end
     table.sort(candidates,function(a,b)
-        return a.score<b.score
+        return a.priority<b.priority
     end)
-
     local occupied={}
-    local labels=0
-    local highlights=0
-    local maxLabels=state.maxWorldLabels
-    local maxHighlights=state.maxWorldHighlights
+    local labels,highlights=0,0
+    state.progressUnknown=0
     for _,entry in ipairs(candidates) do
-        local rec=entry.record
-        local cellX=math.floor(entry.pos.X/125)
-        local cellY=math.floor(entry.pos.Y/64)
-        local cell=cellX..":"..cellY
-        local showLabel=state.objectLabels and labels<maxLabels
-            and not occupied[cell]
-        local showHighlight=state.objectHighlight
-            and highlights<maxHighlights
-        if showLabel or showHighlight then
+        local rec=entry.rec
+        local cell=math.floor(entry.pos.X/125)..":"..
+            math.floor(entry.pos.Y/64)
+        local showLabel=state.objectLabels
+            and labels<state.maxWorldLabels and not occupied[cell]
+        local showOutline=state.objectHighlight
+            and highlights<state.maxWorldHighlights
+        if showLabel or showOutline then
             makeObjectiveNodes(rec)
             local color=categoryColor(rec.kind.key)
             if rec.text then
                 rec.text.TextColor3=color
                 if rec.kind.key=="generator" and state.generatorProgressESP then
                     rec.text.Text=generatorProgress(rec)
+                elseif rec.kind.key=="item" then
+                    rec.text.Text="ITEM • "..rec.obj.Name
                 else
                     rec.text.Text=rec.kind.name:upper()
                 end
@@ -672,78 +769,94 @@ local function refreshObjectiveVisibility()
             end
             if rec.highlight then
                 highlightStyle(rec.highlight,color)
-                rec.highlight.Enabled=showHighlight
+                rec.highlight.Enabled=showOutline
             end
             if showLabel then
-                occupied[cell]=true
-                labels+=1
+                occupied[cell]=true;labels+=1
             end
-            if showHighlight then highlights+=1 end
+            if showOutline then highlights+=1 end
             rec.lastVisible=now
         end
     end
-    -- Cache objects, not thousands of dormant BillboardGui/Highlight instances.
-    -- Keep a small grace period to avoid UI creation/destruction every frame.
+    -- Prune only inactive visuals; retain metadata so spawning hundreds of
+    -- objects won't spawn hundreds of GUI instances.
     for _,rec in pairs(objectiveVisuals) do
         if rec.gui and now-rec.lastVisible>5 then
             destroyObjectiveNodes(rec)
         end
     end
+    state.scanCandidates=cacheCount
     state.visibleLabels=labels
     state.visibleHighlights=highlights
-    state.scanCandidates=count
 end
 
+local function stopSourceWatchers()
+    for _,c in ipairs(sourceConnections) do c:Disconnect() end
+    table.clear(sourceConnections)
+end
 local function startObjectiveScan()
     scanGeneration+=1
-    local generation=scanGeneration
+    local token=scanGeneration
+    stopSourceWatchers()
     clearObjectives()
-    local map=Workspace:FindFirstChild("Map")
-    currentMap=map
-    state.scanProgress="Scanning Workspace.Map..."
-    state.scanDurationMs=0
+    currentMap=Workspace:FindFirstChild("Map")
+    activeInteractables=Workspace:FindFirstChild("Interactables")
     state.scanScanned=0
+    state.scanMapCount=0
+    state.scanInteractableCount=0
+    state.scanDurationMs=0
     lastObjectiveRefresh=0
-    if not map then
-        state.scanProgress="Workspace.Map not found (lobby/transition)"
-        state.scanScanned=0
+    local sources={}
+    if currentMap then sources[#sources+1]=currentMap end
+    if activeInteractables and activeInteractables~=currentMap then
+        sources[#sources+1]=activeInteractables
+    end
+    -- No round map means no active objective ESP; don't tag the lobby.
+    if not currentMap then
+        state.scanProgress="Waiting for Workspace.Map"
+        activeInteractables=nil
         return
     end
+    for _,source in ipairs(sources) do
+        sourceConnections[#sourceConnections+1]=source.DescendantAdded:Connect(
+            function(item) considerObjective(item) end)
+        sourceConnections[#sourceConnections+1]=source.DescendantRemoving:Connect(
+            function(item)
+                if objectiveVisuals[item] then removeObjectiveRecord(item) end
+            end)
+    end
+    state.scanProgress="Scanning Map + Interactables"
     task.spawn(function()
-        local started=os.clock()
-        local objects=map:GetDescendants()
-        state.scanScanned=#objects
-        for i,item in ipairs(objects) do
-            if not state.alive or generation~=scanGeneration then return end
-            considerObjective(item)
-            if i%120==0 then task.wait() end
+        local start=os.clock()
+        for _,source in ipairs(sources) do
+            local descendants=source:GetDescendants()
+            state.scanScanned+=#descendants
+            if source==currentMap then state.scanMapCount=#descendants
+            else state.scanInteractableCount=#descendants end
+            for i,node in ipairs(descendants) do
+                if not state.alive or scanGeneration~=token then return end
+                considerObjective(node)
+                if i%120==0 then task.wait() end
+            end
         end
-        if not state.alive or generation~=scanGeneration then return end
-        state.scanDurationMs=math.floor((os.clock()-started)*1000)
-        state.scanProgress="Map scan complete"
-        lastObjectiveRefresh=0
+        if not state.alive or scanGeneration~=token then return end
+        state.scanDurationMs=math.floor((os.clock()-start)*1000)
+        state.scanProgress="Map + Interactables ready"
     end)
 end
-
--- Only observe changes in the active map, never the full lobby or previews.
-connect(Workspace.DescendantAdded,function(item)
-    if currentMap and item:IsDescendantOf(currentMap) then
-        considerObjective(item)
-    end
-end)
 connect(Workspace.ChildAdded,function(item)
-    if item.Name=="Map" then startObjectiveScan() end
+    if item.Name=="Map" or item.Name=="Interactables" then
+        task.defer(function()
+            if state.alive then startObjectiveScan() end
+        end)
+    end
 end)
 connect(Workspace.ChildRemoved,function(item)
-    if item==currentMap then
-        scanGeneration+=1
-        currentMap=nil
-        clearObjectives()
-        state.scanProgress="Map removed / loading next round"
+    if item==currentMap or item==activeInteractables then
+        task.defer(function()
+            if state.alive then startObjectiveScan() end
+        end)
     end
-end)
-connect(Workspace.DescendantRemoving,function(item)
-    if objectiveVisuals[item] then removeObjectiveRecord(item) end
 end)
 
 
@@ -1225,6 +1338,7 @@ local function cleanup()
     if not state.alive then return end
     state.alive=false
     scanGeneration+=1
+    stopSourceWatchers()
     for _,conn in ipairs(connections) do
         pcall(function() conn:Disconnect() end)
     end
