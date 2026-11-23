@@ -32,7 +32,7 @@ local state = {
     alive=true, playerESP=false, objectiveESP=false,
     fullbright=false, noFog=false, noClip=false,
     speed=false, speedValue=24, fov=70,
-    killerAlert=true, offscreenESP=true, scanProgress="Starting",
+    killerAlert=true, offscreenESP=true, hidden=false, scanProgress="Starting",
     expanded=false, activeTab="Dashboard",
     identifiedObjectives=0, unknownRoles=0,
 }
@@ -154,7 +154,7 @@ local function fadeBlur()
     if blurTween then blurTween:Cancel() end
     if not blur then return end
     blur.Enabled=true
-    local goal=(state.expanded and sceneBlurEnabled)
+    local goal=(state.expanded and sceneBlurEnabled and not state.hidden)
         and Modes[selectedMode].BlurSize or 0
     blurTween=TweenService:Create(blur,
         TweenInfo.new(.35,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut),
@@ -228,7 +228,10 @@ local function makeCard(large: boolean)
     local sheenGradient=create("UIGradient",sheen,{
         Color=ColorSequence.new(
             Color3.fromRGB(255,255,255),Color3.fromRGB(111,118,119)),
-        Transparency=NumberSequence.new(0.1,.98),
+        Transparency=NumberSequence.new({
+            NumberSequenceKeypoint.new(0,.1),
+            NumberSequenceKeypoint.new(1,.98)
+        }),
         Rotation=91,Offset=Vector2.new(-.16,-.2)
     })
     local title=label(frame,"Frosted",0,0,100,50,large and 37 or 24,
@@ -309,10 +312,13 @@ quickAlert.Size=UDim2.new(.463,0,0,48)
 quickESP.TextSize=11
 quickAlert.TextSize=11
 
-local expandedBody=create("Frame",panel,{
+local expandedBody=create("ScrollingFrame",panel,{
     Name="FeatureDashboard",Position=UDim2.fromOffset(0,338),
-    Size=UDim2.new(1,0,0,324),
-    BackgroundTransparency=1,Visible=false
+    Size=UDim2.new(1,0,1,-338),
+    BackgroundTransparency=1,Visible=false,
+    BorderSizePixel=0,ScrollBarThickness=3,
+    ScrollingDirection=Enum.ScrollingDirection.Y,
+    CanvasSize=UDim2.fromOffset(0,327)
 })
 local tabScroll=create("ScrollingFrame",expandedBody,{
     Position=UDim2.new(.025,0,0,0),Size=UDim2.new(.95,0,0,53),
@@ -379,7 +385,7 @@ local redrawers: {() -> ()}={}
 local function toggle(parent: any,name: string,y: number,get: () -> boolean,set: (boolean) -> ())
     local control=button(parent,name,0,y,100,42)
     control.Position=UDim2.new(.03,0,0,y)
-    control.Size=UDim2.new(.94,0,0,43)
+    control.Size=UDim2.new(.94,0,0,44)
     control.TextXAlignment=Enum.TextXAlignment.Left
     control.TextSize=11
     create("UIPadding",control,{PaddingLeft=UDim.new(0,12)})
@@ -481,9 +487,13 @@ local function setExpanded(open: boolean)
     expandedBody.Visible=open
     expand.Text=open and "-" or "+"
     if widthTween then widthTween:Cancel() end
+    local camera=Workspace.CurrentCamera
+    local screenHeight=camera and camera.ViewportSize.Y or 800
+    local availableHeight=math.max(455,screenHeight-70)
+    local expandedHeight=math.min(670,availableHeight)
     widthTween=TweenService:Create(panel,
         TweenInfo.new(.35,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut),
-        {Size=UDim2.fromOffset(screenWidth(open),open and 670 or 334)})
+        {Size=UDim2.fromOffset(screenWidth(open),open and expandedHeight or 334)})
     widthTween:Play()
     fadeBlur()
     task.delay(.37,function()
@@ -500,6 +510,7 @@ restore.Visible=false
 restore.TextSize=11
 connect(restore.MouseButton1Click,function()
     panel.Visible=true
+    state.hidden=false
     restore.Visible=false
     fadeBlur()
 end)
@@ -1121,7 +1132,8 @@ end)
 connect(UserInputService.InputBegan,function(input: InputObject,processed: boolean)
     if not processed and input.KeyCode==Enum.KeyCode.RightControl then
         panel.Visible=not panel.Visible
-        restore.Visible=not panel.Visible
+        state.hidden=not panel.Visible
+        restore.Visible=state.hidden
         fadeBlur()
     end
 end)
