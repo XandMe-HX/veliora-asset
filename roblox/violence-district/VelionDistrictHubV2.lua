@@ -55,6 +55,7 @@ local state = {
     maxWorldLabels=22, maxWorldHighlights=20, objectLabels=true,
     scanCandidates=0, scanScanned=0, scanDurationMs=0,
     visibleLabels=0, visibleHighlights=0, fps=60,
+    highlightBudgetAvailable=20,
 }
 local palette = {
     bg=Color3.fromRGB(26,28,27),
@@ -632,16 +633,30 @@ local function getObjective(item: Instance)
     if item:IsA("ProximityPrompt") then
         kind=promptKind(item)
         if not kind then return nil,nil,nil end
-        -- Resolve to a useful nearby model/part, not Map or Interactables.
-        local parent=item.Parent
-        if not parent then return nil,nil,nil end
-        local model=parent:IsA("Model") and parent
-            or parent:FindFirstAncestorOfClass("Model")
-        if model and model~=currentMap and model~=activeInteractables
-            and inScope(model) then
-            item=model
-        elseif parent:IsA("BasePart") then
-            item=parent
+        -- Follow the nearest physical owner. Generic House/Room models
+        -- must not absorb multiple prompts into giant ESP markers.
+        local cursor=item.Parent
+        local nearestPart: BasePart?=nil
+        local namedModel: Model?=nil
+        local toolOwner: Tool?=nil
+        while cursor and cursor~=currentMap
+            and cursor~=activeInteractables do
+            if cursor:IsA("BasePart") and not nearestPart then
+                nearestPart=cursor
+            elseif cursor:IsA("Tool") and not toolOwner then
+                toolOwner=cursor
+            elseif cursor:IsA("Model") and not namedModel then
+                local match=classifyNamed(cursor)
+                if match and match.key==kind.key then namedModel=cursor end
+            end
+            cursor=cursor.Parent
+        end
+        if namedModel then
+            item=namedModel
+        elseif toolOwner and kind.key=="item" then
+            item=toolOwner
+        elseif nearestPart then
+            item=nearestPart
         else
             return nil,nil,nil
         end
@@ -830,6 +845,16 @@ local function refreshObjectiveVisibility()
     end)
     local occupied={}
     local labels,highlights=0,0
+    -- Share a conservative Highlight limit with active Player ESP.
+    local playerHighlights=0
+    for _,data in pairs(playerVisuals) do
+        if data.highlight and data.highlight.Enabled then
+            playerHighlights+=1
+        end
+    end
+    local safeHighlightLimit=math.min(state.maxWorldHighlights,
+        math.max(0,28-playerHighlights))
+    state.highlightBudgetAvailable=safeHighlightLimit
     state.progressUnknown=0
     for _,entry in ipairs(candidates) do
         local rec=entry.rec
@@ -838,7 +863,7 @@ local function refreshObjectiveVisibility()
         local showLabel=state.objectLabels
             and labels<state.maxWorldLabels and not occupied[cell]
         local showOutline=state.objectHighlight
-            and highlights<state.maxWorldHighlights
+            and highlights<safeHighlightLimit
         if showLabel or showOutline then
             makeObjectiveNodes(rec)
             local color=categoryColor(rec.kind.key)
