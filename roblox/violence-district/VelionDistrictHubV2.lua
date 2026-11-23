@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V4.2 - FLUENT GAME TRACKING
+    VELION DISTRICT HUB V4.3 - OPTIONAL MOONWALK A/D
     For Roblox Violence District - client-side utility module.
     Game UI uses upstream Fluent; the World ESP engine is local code.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -33,6 +33,8 @@ local state = {
     alive=true, playerESP=true, objectiveESP=true,
     fullbright=false, noFog=false, noClip=false,
     speed=false, speedValue=24, fov=70,
+    moonwalk=false, moonwalkSteer=.28,
+    moonwalkStatus="OFF (enable in Movement or press M)",
     killerAlert=true, offscreenESP=true, hidden=false, scanProgress="Starting",
     expanded=true, activeTab="Home", sceneBlur=false,
     killerESP=true, survivorESP=true, unknownESP=false,
@@ -193,7 +195,7 @@ local uiHeight=math.min(490,math.max(320,cameraSize.Y-80))
 local createdWindow,Window=pcall(function()
     return Fluent:CreateWindow({
         Title="VELION | VIOLENCE DISTRICT",
-        SubTitle="V4.2 / Game Tracking",
+        SubTitle="V4.3 / Moonwalk Assist",
         TabWidth=cameraSize.X<500 and 116 or 150,
         Size=UDim2.fromOffset(uiWidth,uiHeight),
         Acrylic=true,Theme="Dark",
@@ -1034,6 +1036,102 @@ end
 
 
 
+-- Moonwalk A/D: local controller assist, no simulated keypress or sprint hack.
+-- With the mode on, hold A or D to advance with a mild side steer
+-- while the avatar faces the camera (opposite its movement direction).
+-- This is a visual movement approximation, not an exact DBD animation.
+local moonwalkBindName="VelionMoonwalkAD_"..tostring(player.UserId)
+local moonwalkBound=false
+local moonwalkCharacterHumanoid: Humanoid?=nil
+local moonwalkOriginalAutoRotate: boolean?=nil
+local function restoreMoonwalkRotation()
+    if moonwalkCharacterHumanoid and moonwalkCharacterHumanoid.Parent
+        and moonwalkOriginalAutoRotate~=nil then
+        moonwalkCharacterHumanoid.AutoRotate=moonwalkOriginalAutoRotate
+    end
+    moonwalkCharacterHumanoid=nil
+    moonwalkOriginalAutoRotate=nil
+end
+local function moonwalkStep(deltaTime: number)
+    if not state.alive or not state.moonwalk then return end
+    if UserInputService:GetFocusedTextBox() then
+        restoreMoonwalkRotation()
+        return
+    end
+    local character=player.Character
+    local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+    local root=character and character:FindFirstChild("HumanoidRootPart")
+    local camera=Workspace.CurrentCamera
+    if not humanoid or not root or not camera or humanoid.Health<=0 then
+        restoreMoonwalkRotation()
+        state.moonwalkStatus="ON | waiting for character/camera"
+        return
+    end
+    if humanoid.Sit or root.Anchored then
+        restoreMoonwalkRotation()
+        state.moonwalkStatus="ON | paused (seated/anchored)"
+        return
+    end
+    local left=UserInputService:IsKeyDown(Enum.KeyCode.A)
+    local right=UserInputService:IsKeyDown(Enum.KeyCode.D)
+    if not left and not right then
+        restoreMoonwalkRotation()
+        state.moonwalkStatus="ON | hold A/D to moonwalk; M toggles"
+        return
+    end
+    if moonwalkCharacterHumanoid~=humanoid then
+        restoreMoonwalkRotation()
+        moonwalkCharacterHumanoid=humanoid
+        moonwalkOriginalAutoRotate=humanoid.AutoRotate
+    end
+    humanoid.AutoRotate=false
+    local look=camera.CFrame.LookVector
+    local forward=Vector3.new(look.X,0,look.Z)
+    if forward.Magnitude<.01 then return end
+    forward=forward.Unit
+    local rightVector=Vector3.new(camera.CFrame.RightVector.X,0,
+        camera.CFrame.RightVector.Z)
+    if rightVector.Magnitude<.01 then return end
+    rightVector=rightVector.Unit
+    local strafe=(right and 1 or 0)-(left and 1 or 0)
+    local travel=forward+rightVector*strafe*state.moonwalkSteer
+    if travel.Magnitude>.01 then
+        -- Called just after the default PlayerModule input processing.
+        humanoid:Move(travel.Unit,false)
+        -- Rotate only; do not translate/teleport HumanoidRootPart.
+        -- Facing the camera makes forward travel appear backward.
+        local facing=CFrame.lookAt(root.Position,root.Position-forward)
+        root.CFrame=root.CFrame:Lerp(facing,math.clamp(deltaTime*13,0,1))
+        state.moonwalkStatus="ON | A/D steering active (client-side)"
+    end
+end
+local function setMoonwalk(enabled: boolean)
+    state.moonwalk=enabled
+    if enabled then
+        if moonwalkBound then return end
+        local ok,err=pcall(function()
+            RunService:BindToRenderStep(moonwalkBindName,
+                Enum.RenderPriority.Input.Value+5,moonwalkStep)
+        end)
+        if ok then
+            moonwalkBound=true
+            state.moonwalkStatus="ON | hold A/D; press M to toggle"
+        else
+            state.moonwalk=false
+            state.moonwalkStatus="Bind failed: "..tostring(err):sub(1,75)
+        end
+    else
+        if moonwalkBound then
+            pcall(function()
+                RunService:UnbindFromRenderStep(moonwalkBindName)
+            end)
+            moonwalkBound=false
+        end
+        restoreMoonwalkRotation()
+        state.moonwalkStatus="OFF | standard Roblox controls restored"
+    end
+end
+
 -- =========================================
 -- Fluent menu - actual controls, not decorative rectangles.
 -- =========================================
@@ -1239,6 +1337,27 @@ registerSlider(Tabs.Movement,"SpeedValue","WalkSpeed",
     "Local Humanoid WalkSpeed (game may override)",
     state.speedValue,16,60,0,
     function(v) state.speedValue=v end)
+local moonwalkToggle=registerToggle(Tabs.Movement,
+    "MoonwalkAD","Moonwalk A/D Assist",
+    "ON: hold A/D to steer forward while facing the camera. M toggles.",
+    "moonwalk",setMoonwalk)
+registerSlider(Tabs.Movement,"MoonwalkSteer","Moonwalk Steering",
+    "Side steering strength while holding A or D",
+    state.moonwalkSteer,.1,.65,2,
+    function(value) state.moonwalkSteer=value end)
+local moonwalkStatusBox=Tabs.Movement:AddParagraph({
+    Title="MOONWALK STATUS",Content="OFF | press M or enable toggle"
+})
+connect(UserInputService.InputBegan,function(input,processed)
+    if not processed and not UserInputService:GetFocusedTextBox()
+        and input.KeyCode==Enum.KeyCode.M and state.alive then
+        if moonwalkToggle and type(moonwalkToggle.SetValue)=="function" then
+            moonwalkToggle:SetValue(not state.moonwalk)
+        else
+            setMoonwalk(not state.moonwalk)
+        end
+    end
+end)
 
 registerToggle(Tabs.Visual,"Fullbright","Fullbright",
     "Lighten environment locally","fullbright",
@@ -1522,6 +1641,7 @@ connect(RunService.Heartbeat,function()
         state.visibleHighlights,state.maxWorldHighlights,state.fps))
     skillStatus:SetDesc(skill)
     inputStatus:SetDesc(state.inputStatus)
+    moonwalkStatusBox:SetDesc(state.moonwalkStatus)
 end)
 
 -- Keep experimental auto input isolated from ESP and do not infer success
@@ -1592,6 +1712,7 @@ end)
 local function cleanup()
     if not state.alive then return end
     state.alive=false
+    setMoonwalk(false)
     scanGeneration+=1
     stopSourceWatchers()
     for _,conn in ipairs(connections) do
@@ -1619,4 +1740,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 startObjectiveScan()
-print("[Velion District V4.2] Map+Interactables + item/role/ability observers loaded; gameplay not verified.")
+print("[Velion District V4.3] Fluent + optional Moonwalk A/D added; Roblox runtime not tested.")
