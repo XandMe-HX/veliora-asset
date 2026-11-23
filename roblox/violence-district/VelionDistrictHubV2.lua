@@ -1,10 +1,11 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V2.1 - MINI HUD EDITION
+    VELION DISTRICT HUB V3.0 - GLASS FEATURE HUB
     For Roblox Violence District - client-side utility module.
     Clean, readable Luau. No external UI libraries, telemetry or extra loaders.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
-    Objective detection uses names/prompts because map internals may change.
+    UI design uses Frosted/Clear/Blur as themes, not giant selector cards.
+    Game internals can change. Auto input attempts are not confirmed success.
 ]]
 
 local Players = game:GetService("Players")
@@ -33,15 +34,21 @@ local state = {
     fullbright=false, noFog=false, noClip=false,
     speed=false, speedValue=24, fov=70,
     killerAlert=true, offscreenESP=true, hidden=false, scanProgress="Starting",
-    expanded=false, activeTab="Dashboard",
+    expanded=true, activeTab="Home", sceneBlur=false,
+    killerESP=true, survivorESP=true, playerNames=true, playerDistance=true,
+    playerMask=true, chaseStatus=true, knockedStatus=true, hookedStatus=true,
+    playerHighlight=true, nextKiller=true, skillMonitor=true,
+    autoSkillCheck=false, inputStatus="No action attempted",
+    generatorESP=true, palletESP=true, windowESP=true, hookESP=true,
+    gateESP=true, generatorProgressESP=true, espDistance=650,
     identifiedObjectives=0, unknownRoles=0,
 }
 local palette = {
-    bg=Color3.fromRGB(12,15,28),
-    side=Color3.fromRGB(18,22,39),
-    surface=Color3.fromRGB(31,36,59),
-    accent=Color3.fromRGB(155,117,249),
-    green=Color3.fromRGB(51,180,137),
+    bg=Color3.fromRGB(26,28,27),
+    side=Color3.fromRGB(43,45,42),
+    surface=Color3.fromRGB(67,69,66),
+    accent=Color3.fromRGB(220,230,220),
+    green=Color3.fromRGB(126,222,167),
     white=Color3.fromRGB(241,242,250),
     muted=Color3.fromRGB(164,170,191),
     yellow=Color3.fromRGB(248,186,68),
@@ -90,431 +97,406 @@ end
 -- ============================================================
 
 -- Glass appearance values live in this typed table.
-type ModeStyle = {
-    Subtitle: string, BlurSize: number, Tint: Color3,
-    Alpha: number, Border: Color3, BorderAlpha: number,
-    Radius: number, SheenAlpha: number,
-    Gradient: ColorSequence, Edge: ColorSequence
+
+-- Main panel: same feature dashboard in all three glass styles.
+-- Roblox has NO per-UI backdrop blur or real refraction. Tint, rim and sheen
+-- emulate the surface. The optional Lighting blur affects the whole scene.
+type GlassMode = {
+    Subtitle: string, Tint: Color3, TintDark: Color3,
+    Transparency: number, Rim: Color3, RimTransparency: number,
+    Radius: number, Blur: number, Sheen: number,
 }
-local Modes: {[string]: ModeStyle} = {
-    Frosted = {
-        Subtitle="Concept", BlurSize=24,
-        Tint=Color3.fromRGB(55,57,55),Alpha=.28,
-        Border=Color3.fromRGB(229,229,218),BorderAlpha=.5,
-        Radius=29,SheenAlpha=.8,
-        Gradient=ColorSequence.new(
-            Color3.fromRGB(125,128,123),Color3.fromRGB(65,60,54)),
-        Edge=ColorSequence.new(
-            Color3.fromRGB(252,250,239),Color3.fromRGB(139,145,137))
+local Modes: {[string]: GlassMode} = {
+    Frosted={
+        Subtitle="Concept", Tint=Color3.fromRGB(64,66,62),
+        TintDark=Color3.fromRGB(29,31,30),Transparency=.20,
+        Rim=Color3.fromRGB(234,233,224),RimTransparency=.47,
+        Radius=23,Blur=24,Sheen=.84,
     },
-    Clear = {
-        Subtitle="iOS", BlurSize=4,
-        Tint=Color3.fromRGB(168,205,204),Alpha=.87,
-        Border=Color3.fromRGB(255,255,255),BorderAlpha=.15,
-        Radius=24,SheenAlpha=.71,
-        Gradient=ColorSequence.new(
-            Color3.fromRGB(226,253,247),Color3.fromRGB(160,139,113)),
-        Edge=ColorSequence.new(
-            Color3.fromRGB(255,255,255),Color3.fromRGB(135,158,159))
+    Clear={
+        Subtitle="iOS",Tint=Color3.fromRGB(178,211,206),
+        TintDark=Color3.fromRGB(52,76,78),Transparency=.79,
+        Rim=Color3.fromRGB(255,255,255),RimTransparency=.18,
+        Radius=25,Blur=4,Sheen=.72,
     },
-    Blur = {
-        Subtitle="One UI", BlurSize=14,
-        Tint=Color3.fromRGB(151,123,99),Alpha=.51,
-        Border=Color3.fromRGB(232,215,192),BorderAlpha=.61,
-        Radius=34,SheenAlpha=.9,
-        Gradient=ColorSequence.new(
-            Color3.fromRGB(189,162,127),Color3.fromRGB(104,99,86)),
-        Edge=ColorSequence.new(
-            Color3.fromRGB(239,220,193),Color3.fromRGB(145,132,120))
+    Blur={
+        Subtitle="One UI",Tint=Color3.fromRGB(139,116,98),
+        TintDark=Color3.fromRGB(65,57,54),Transparency=.42,
+        Rim=Color3.fromRGB(236,222,204),RimTransparency=.58,
+        Radius=28,Blur=14,Sheen=.89,
     }
 }
-local names={"Frosted","Clear","Blur"}
-local stored=player:GetAttribute("GlassMode")
-local selectedMode=(typeof(stored)=="string" and Modes[stored])
-    and stored or "Frosted"
+local savedMode=player:GetAttribute("GlassMode")
+local glassMode: string=(typeof(savedMode)=="string" and Modes[savedMode])
+    and savedMode or "Frosted"
 local blur: BlurEffect?=nil
 local blurCreated=false
-for _,effect in ipairs(Lighting:GetChildren()) do
-    if effect.Name=="GlassBlur" and effect:IsA("BlurEffect") then
-        if not blur then blur=effect else effect:Destroy() end
+for _,child in ipairs(Lighting:GetChildren()) do
+    if child.Name=="GlassBlur" and child:IsA("BlurEffect") then
+        if not blur then blur=child else child:Destroy() end
     end
 end
 if not blur then
     blur=Instance.new("BlurEffect")
     blur.Name="GlassBlur"
     blur.Size=0
+    blur.Enabled=false
     blur.Parent=Lighting
     blurCreated=true
 end
-local priorBlurSize=blur.Size
-local priorBlurEnabled=blur.Enabled
+local originalBlurSize=blur.Size
+local originalBlurEnabled=blur.Enabled
 local blurTween: Tween?=nil
-local sceneBlurEnabled=true
-local function fadeBlur()
-    if blurTween then blurTween:Cancel() end
-    if not blur then return end
-    blur.Enabled=true
-    local goal=(state.expanded and sceneBlurEnabled and not state.hidden)
-        and Modes[selectedMode].BlurSize or 0
-    blurTween=TweenService:Create(blur,
-        TweenInfo.new(.35,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut),
-        {Size=goal})
-    blurTween:Play()
-end
 local gui=create("ScreenGui",playerGui,{
     Name="VelionDistrictHubV2",ResetOnSpawn=false,
-    IgnoreGuiInset=false,DisplayOrder=800,
+    DisplayOrder=800,IgnoreGuiInset=false,
     ZIndexBehavior=Enum.ZIndexBehavior.Sibling
 })
 pcall(function() gui.ScreenInsets=Enum.ScreenInsets.DeviceSafeInsets end)
-local function screenWidth(open: boolean): number
-    local cam=Workspace.CurrentCamera
-    local x=cam and cam.ViewportSize.X or 1280
-    return math.min(open and 520 or 365, math.max(296,x-22))
+local function windowSize(open: boolean): UDim2
+    local camera=Workspace.CurrentCamera
+    local vp=camera and camera.ViewportSize or Vector2.new(1280,720)
+    local width=math.min(438,math.max(280,vp.X-26))
+    local height=math.min(555,math.max(310,vp.Y-52))
+    return UDim2.fromOffset(width,open and height or 112)
 end
 local panel=create("Frame",gui,{
-    Name="MiniHUD",AnchorPoint=Vector2.new(1,0),
-    Position=UDim2.new(1,-16,0,16),
-    Size=UDim2.fromOffset(screenWidth(false),334),
-    BackgroundTransparency=1,BorderSizePixel=0,
-    Active=true,ClipsDescendants=false
+    Name="GlassWindow",AnchorPoint=Vector2.new(1,0),
+    Position=UDim2.new(1,-17,0,18),
+    Size=windowSize(true),BackgroundColor3=Modes.Frosted.Tint,
+    BackgroundTransparency=Modes.Frosted.Transparency,
+    ClipsDescendants=true,Active=true,BorderSizePixel=0
+})
+local panelCorner=create("UICorner",panel,{CornerRadius=UDim.new(0,23)})
+local panelRim=create("UIStroke",panel,{
+    Color=Modes.Frosted.Rim,Transparency=Modes.Frosted.RimTransparency,
+    Thickness=1.3,ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+})
+local panelRimGradient=create("UIGradient",panelRim,{
+    Color=ColorSequence.new(
+        Color3.fromRGB(255,255,255),Color3.fromRGB(134,135,129)),
+    Rotation=125
+})
+local panelGradient=create("UIGradient",panel,{
+    Color=ColorSequence.new(
+        Modes.Frosted.Tint,Modes.Frosted.TintDark),
+    Rotation=29
 })
 create("UISizeConstraint",panel,{
-    MinSize=Vector2.new(296,320),MaxSize=Vector2.new(540,690)
+    MinSize=Vector2.new(274,112),MaxSize=Vector2.new(455,590)
 })
 local hudScale=create("UIScale",panel,{Scale=1})
-local cardArea=create("Frame",panel,{
-    Name="GlassModeSelector",Size=UDim2.new(1,0,0,236),
+-- Top sheen is decorative; the glass dashboard itself remains usable.
+local sheen=create("Frame",panel,{
+    Name="GlassSheen",Position=UDim2.fromOffset(6,5),
+    Size=UDim2.new(1,-12,0,58),
+    BackgroundColor3=Color3.fromRGB(247,249,238),
+    BackgroundTransparency=.84,BorderSizePixel=0
+})
+local sheenCorner=create("UICorner",sheen,{CornerRadius=UDim.new(0,20)})
+create("UIGradient",sheen,{
+    Rotation=90,Transparency=NumberSequence.new({
+        NumberSequenceKeypoint.new(0,.13),
+        NumberSequenceKeypoint.new(1,.98)
+    })
+})
+local header=create("Frame",panel,{
+    Name="TopBar",Size=UDim2.new(1,0,0,67),
+    BackgroundTransparency=1,Active=true
+})
+local dragHandle=create("Frame",header,{
+    Name="DragArea",Size=UDim2.new(1,-111,1,0),
+    BackgroundTransparency=1,Active=true
+})
+local title=label(dragHandle,"VELION  /  DISTRICT",16,8,235,29,15,palette.white)
+title.Font=Enum.Font.GothamBold
+local themeText=label(dragHandle,"FROSTED  /  CONCEPT",17,36,260,17,10,palette.muted)
+local minimize=button(header,"-",0,10,45,45)
+minimize.Name="Minimize"
+minimize.Position=UDim2.new(1,-102,0,11)
+local close=button(header,"X",0,10,45,45)
+close.Name="Close"
+close.Position=UDim2.new(1,-51,0,11)
+close.BackgroundColor3=Color3.fromRGB(77,55,57)
+local navStrip=create("ScrollingFrame",panel,{
+    Name="FeatureTabs",Position=UDim2.fromOffset(0,68),
+    Size=UDim2.new(1,0,0,53),BackgroundTransparency=1,
+    BorderSizePixel=0,ScrollBarThickness=2,
+    ScrollingDirection=Enum.ScrollingDirection.X,
+    CanvasSize=UDim2.fromOffset(798,0),
+})
+create("UIPadding",navStrip,{PaddingLeft=UDim.new(0,10)})
+local navGradient=create("UIGradient",navStrip,{
+    Color=ColorSequence.new(Color3.fromRGB(254,255,248),
+        Color3.fromRGB(233,235,224)),Rotation=90
+})
+local mainArea=create("Frame",panel,{
+    Name="TabContent",Position=UDim2.fromOffset(8,125),
+    Size=UDim2.new(1,-16,1,-178),
+    BackgroundColor3=Color3.fromRGB(26,28,27),
+    BackgroundTransparency=.54,BorderSizePixel=0,
+    ClipsDescendants=true
+})
+round(mainArea,13)
+create("UIStroke",mainArea,{
+    Color=Color3.fromRGB(246,245,229),Transparency=.83,Thickness=.8
+})
+local footer=create("Frame",panel,{
+    Position=UDim2.new(0,9,1,-48),
+    Size=UDim2.new(1,-18,0,40),
     BackgroundTransparency=1
 })
-local cards={}
-local function makeCard(large: boolean)
-    local frame=create("Frame",cardArea,{
-        BackgroundColor3=Modes.Frosted.Tint,
-        BackgroundTransparency=Modes.Frosted.Alpha,
-        BorderSizePixel=0,ClipsDescendants=false
-    })
-    local corner=create("UICorner",frame,{CornerRadius=UDim.new(0,28)})
-    local gradient=create("UIGradient",frame,{
-        Color=Modes.Frosted.Gradient,Rotation=22,
-        Offset=Vector2.new(-.15,0)
-    })
-    local stroke=create("UIStroke",frame,{
-        Color=Modes.Frosted.Border,Transparency=Modes.Frosted.BorderAlpha,
-        Thickness=1.2,ApplyStrokeMode=Enum.ApplyStrokeMode.Border
-    })
-    local edge=create("UIGradient",stroke,{
-        Color=Modes.Frosted.Edge,Rotation=136,
-        Offset=Vector2.new(-.15,-.15)
-    })
-    local inner=create("Frame",frame,{
-        Position=UDim2.fromOffset(5,5),
-        Size=UDim2.new(1,-10,1,-10),BackgroundTransparency=1
-    })
-    local innerCorner=create("UICorner",inner,{
-        CornerRadius=UDim.new(0,24)
-    })
-    local innerStroke=create("UIStroke",inner,{
-        Thickness=.75,Color=Color3.new(1,1,1),
-        Transparency=.82,ApplyStrokeMode=Enum.ApplyStrokeMode.Border
-    })
-    local sheen=create("Frame",frame,{
-        Position=UDim2.fromOffset(9,9),Size=UDim2.new(1,-18,.46,0),
-        BackgroundColor3=Color3.fromRGB(251,249,245),
-        BackgroundTransparency=.8,BorderSizePixel=0
-    })
-    local sheenCorner=create("UICorner",sheen,{
-        CornerRadius=UDim.new(0,22)
-    })
-    local sheenGradient=create("UIGradient",sheen,{
-        Color=ColorSequence.new(
-            Color3.fromRGB(255,255,255),Color3.fromRGB(111,118,119)),
-        Transparency=NumberSequence.new({
-            NumberSequenceKeypoint.new(0,.1),
-            NumberSequenceKeypoint.new(1,.98)
-        }),
-        Rotation=91,Offset=Vector2.new(-.16,-.2)
-    })
-    local title=label(frame,"Frosted",0,0,100,50,large and 37 or 24,
-        Color3.new(1,1,1))
-    title.Font=Enum.Font.GothamMedium
-    title.TextScaled=true
-    title.TextXAlignment=Enum.TextXAlignment.Center
-    title.Size=UDim2.new(1,-36,0,large and 63 or 39)
-    title.Position=UDim2.new(0,18,0,large and 24 or 8)
-    create("UITextSizeConstraint",title,{
-        MinTextSize=large and 20 or 15,
-        MaxTextSize=large and 45 or 27
-    })
-    create("UIStroke",title,{
-        Color=Color3.fromRGB(20,20,20),Thickness=.6,Transparency=.87
-    })
-    local subtitle=label(frame,"Concept",0,0,100,22,large and 14 or 12,
-        Color3.new(1,1,1))
-    subtitle.Font=Enum.Font.GothamMedium
-    subtitle.TextXAlignment=Enum.TextXAlignment.Center
-    subtitle.TextScaled=true
-    subtitle.Position=UDim2.new(0,18,0,large and 91 or 52)
-    subtitle.Size=UDim2.new(1,-36,0,large and 22 or 19)
-    create("UITextSizeConstraint",subtitle,{
-        MinTextSize=10,MaxTextSize=large and 15 or 13
-    })
-    local hit=button(frame,"",0,0,100,100)
-    hit.BackgroundTransparency=1
-    hit.Size=UDim2.fromScale(1,1)
-    hit.ZIndex=15
-    local scale=create("UIScale",frame,{Scale=1})
-    local card={frame=frame,corner=corner,gradient=gradient,
-        stroke=stroke,edge=edge,innerCorner=innerCorner,
-        innerStroke=innerStroke,sheen=sheen,sheenCorner=sheenCorner,
-        sheenGradient=sheenGradient,title=title,subtitle=subtitle,
-        hit=hit,scale=scale,mode="Frosted"}
-    cards[#cards+1]=card
-    return card
-end
-local hero=makeCard(true)
-local second=makeCard(false)
-local third=makeCard(false)
-hero.frame.Position=UDim2.new(.025,0,0,9)
-hero.frame.Size=UDim2.new(.95,0,0,122)
-second.frame.Position=UDim2.new(.025,0,0,145)
-second.frame.Size=UDim2.new(.463,0,0,83)
-third.frame.Position=UDim2.new(.512,0,0,145)
-third.frame.Size=UDim2.new(.463,0,0,83)
--- Use a size/aspect constraint on a small decorative high-gloss dot.
-local dot=create("Frame",panel,{
-    Position=UDim2.new(1,-155,0,22),
-    Size=UDim2.fromOffset(12,12),BackgroundColor3=Color3.new(1,1,1),
-    BackgroundTransparency=.6,ZIndex=25
-})
-round(dot,99)
-create("UIAspectRatioConstraint",dot,{AspectRatio=1})
-local expand=button(panel,"+",0,0,44,44)
-expand.Name="Expand"
-expand.Position=UDim2.new(1,-105,0,13)
-expand.ZIndex=32
-expand.BackgroundTransparency=.42
-local close=button(panel,"X",0,0,44,44)
-close.Position=UDim2.new(1,-55,0,13)
-close.ZIndex=32
-close.BackgroundColor3=Color3.fromRGB(72,48,48)
-close.BackgroundTransparency=.3
-local hudStatus=label(panel,"PLAYERS --  |  OBJECTIVES --  |  KILLER --",
-    10,236,325,27,11,palette.white)
-hudStatus.Position=UDim2.new(.025,0,0,236)
-hudStatus.Size=UDim2.new(.95,0,0,28)
-hudStatus.Font=Enum.Font.GothamMedium
-local quickESP=button(panel,"PLAYER ESP: OFF",0,0,100,48)
-quickESP.Position=UDim2.new(.025,0,0,276)
-quickESP.Size=UDim2.new(.463,0,0,48)
-local quickAlert=button(panel,"KILLER ALERT: ON",0,0,100,48)
-quickAlert.Position=UDim2.new(.512,0,0,276)
-quickAlert.Size=UDim2.new(.463,0,0,48)
-quickESP.TextSize=11
-quickAlert.TextSize=11
+local footerText=label(footer,"VELION READY  •  RIGHT CTRL TO HIDE",10,3,360,31,10,palette.white)
+footerText.Size=UDim2.new(1,-20,0,31)
+local miniSummary=label(panel,"PLAYERS --  |  OBJECTIVES --  |  KILLER: --",
+    17,70,320,31,11,palette.white)
+miniSummary.Size=UDim2.new(1,-34,0,32)
+miniSummary.Visible=false
+local restore=button(gui,"VD",0,0,49,46)
+restore.Name="RestoreGlassHub"
+restore.Position=UDim2.new(1,-64,0,18)
+restore.Visible=false
+restore.BackgroundColor3=Color3.fromRGB(73,77,68)
 
-local expandedBody=create("ScrollingFrame",panel,{
-    Name="FeatureDashboard",Position=UDim2.fromOffset(0,338),
-    Size=UDim2.new(1,0,1,-338),
-    BackgroundTransparency=1,Visible=false,
-    BorderSizePixel=0,ScrollBarThickness=3,
-    ScrollingDirection=Enum.ScrollingDirection.Y,
-    CanvasSize=UDim2.fromOffset(0,327)
-})
-local tabScroll=create("ScrollingFrame",expandedBody,{
-    Position=UDim2.new(.025,0,0,0),Size=UDim2.new(.95,0,0,53),
-    BackgroundTransparency=1,BorderSizePixel=0,
-    ScrollBarThickness=2,ScrollingDirection=Enum.ScrollingDirection.X,
-    CanvasSize=UDim2.fromOffset(560,0)
-})
-local contents=create("Frame",expandedBody,{
-    Position=UDim2.new(.025,0,0,61),
-    Size=UDim2.new(.95,0,0,240),
-    BackgroundColor3=Color3.fromRGB(38,40,39),
-    BackgroundTransparency=.17,BorderSizePixel=0
-})
-round(contents,18)
-create("UIStroke",contents,{
-    Color=Color3.fromRGB(221,218,208),
-    Transparency=.72,Thickness=.8
-})
-local footer=label(expandedBody,"RIGHT CTRL  show/hide  |  X  unload",
-    12,307,400,18,10,palette.muted)
-footer.Position=UDim2.new(.025,0,0,307)
-footer.Size=UDim2.new(.95,0,0,18)
-local pages,nav={},{}
-local function makePage(name: string)
-    local page=create("Frame",contents,{
-        Name=name,Size=UDim2.fromScale(1,1),
-        BackgroundTransparency=1,Visible=false
+local pages: {[string]: ScrollingFrame}={}
+local nav: {[string]: TextButton}={}
+local tabNames={"Home","Players","Objects","Survivor","Movement","Visual","Settings"}
+local function makePage(name: string): ScrollingFrame
+    local page=create("ScrollingFrame",mainArea,{
+        Name="Tab_"..name,Size=UDim2.fromScale(1,1),
+        BackgroundTransparency=1,Visible=false,
+        BorderSizePixel=0,ScrollBarThickness=3,
+        ScrollingDirection=Enum.ScrollingDirection.Y,
+        CanvasSize=UDim2.fromOffset(0,0),
+        AutomaticCanvasSize=Enum.AutomaticSize.Y
+    })
+    create("UIListLayout",page,{
+        Padding=UDim.new(0,8),
+        SortOrder=Enum.SortOrder.LayoutOrder
+    })
+    create("UIPadding",page,{
+        PaddingTop=UDim.new(0,9),PaddingBottom=UDim.new(0,12),
+        PaddingLeft=UDim.new(0,10),PaddingRight=UDim.new(0,10)
     })
     pages[name]=page
     return page
 end
-local dashboard=makePage("Dashboard")
-local visual=makePage("ESP")
-local playerPage=makePage("Movement")
-local objectivesPage=makePage("Objectives")
+local homePage=makePage("Home")
+local playersPage=makePage("Players")
+local objectsPage=makePage("Objects")
+local survivorPage=makePage("Survivor")
+local movementPage=makePage("Movement")
+local visualPage=makePage("Visual")
 local settingsPage=makePage("Settings")
-local tabs={"Dashboard","ESP","Movement","Objectives","Settings"}
-local function choosePage(name: string)
+local function switchTab(name: string)
     state.activeTab=name
-    for n,p in pairs(pages) do p.Visible=n==name end
-    for n,btn in pairs(nav) do
-        btn.BackgroundColor3=(n==name) and Color3.fromRGB(84,87,83)
-            or Color3.fromRGB(47,50,48)
+    for n,p in pairs(pages) do p.Visible=(n==name) end
+    for n,b in pairs(nav) do
+        b.BackgroundColor3=(n==name) and Color3.fromRGB(118,134,116)
+            or Color3.fromRGB(61,65,62)
+        b.BackgroundTransparency=(n==name) and .32 or .57
+        b.TextColor3=(n==name) and palette.white or palette.muted
     end
 end
-for i,name in ipairs(tabs) do
-    local tab=button(tabScroll,name,(i-1)*110,2,104,47)
-    nav[name]=tab
+for i,name in ipairs(tabNames) do
+    local tab=button(navStrip,name,(i-1)*111,3,105,44)
+    tab.Name="Nav"..name
+    tab.BackgroundColor3=Color3.fromRGB(61,65,62)
+    tab.BackgroundTransparency=.57
+    tab.Font=Enum.Font.GothamMedium
     tab.TextSize=11
-    connect(tab.MouseButton1Click,function() choosePage(name) end)
+    nav[name]=tab
+    connect(tab.MouseButton1Click,function() switchTab(name) end)
 end
-local function sectionTitle(page: any,title: string)
-    local t=label(page,title,13,2,310,26,14,palette.white)
-    t.Font=Enum.Font.GothamMedium
+local redraws: {() -> ()}={}
+local function glassRow(page: ScrollingFrame,headerText: string,
+    description: string): (TextButton,TextLabel)
+    local row=button(page,"",0,0,100,54)
+    row.Size=UDim2.new(1,-5,0,55)
+    row.BackgroundColor3=Color3.fromRGB(70,75,70)
+    row.BackgroundTransparency=.40
+    row.Text=""
+    local rowTitle=label(row,headerText,12,7,300,23,12,palette.white)
+    rowTitle.Size=UDim2.new(1,-108,0,23)
+    rowTitle.Font=Enum.Font.GothamMedium
+    local note=label(row,description,12,30,305,16,10,palette.muted)
+    note.Size=UDim2.new(1,-108,0,17)
+    local indicator=label(row,"",0,0,69,55,11,palette.muted)
+    indicator.Position=UDim2.new(1,-77,0,0)
+    indicator.TextXAlignment=Enum.TextXAlignment.Right
+    indicator.Font=Enum.Font.GothamBold
+    return row,indicator
 end
-sectionTitle(dashboard,"DASHBOARD")
-sectionTitle(visual,"VISUAL & ESP")
-sectionTitle(playerPage,"MOVEMENT")
-sectionTitle(objectivesPage,"MAP OBJECTIVES")
-sectionTitle(settingsPage,"GLASS SETTINGS")
-
-local redrawQuick: () -> () = function() end
-local redrawers: {() -> ()}={}
-local function toggle(parent: any,name: string,y: number,get: () -> boolean,set: (boolean) -> ())
-    local control=button(parent,name,0,y,100,42)
-    control.Position=UDim2.new(.03,0,0,y)
-    control.Size=UDim2.new(.94,0,0,44)
-    control.TextXAlignment=Enum.TextXAlignment.Left
-    control.TextSize=11
-    create("UIPadding",control,{PaddingLeft=UDim.new(0,12)})
-    local result=label(control,"OFF",0,0,45,43,11,palette.muted)
-    result.Position=UDim2.new(1,-50,0,0)
-    result.TextXAlignment=Enum.TextXAlignment.Center
+local function makeToggle(page: ScrollingFrame,heading: string,help: string,
+    getter: () -> boolean,setter: (boolean) -> ())
+    local row,status=glassRow(page,heading,help)
     local function redraw()
-        local on=get()
-        control.BackgroundColor3=on and Color3.fromRGB(57,83,73)
-            or Color3.fromRGB(48,51,49)
-        result.Text=on and "ON" or "OFF"
-        result.TextColor3=on and palette.green or palette.muted
+        local on=getter()
+        status.Text=on and "ON" or "OFF"
+        status.TextColor3=on and palette.green or palette.muted
+        row.BackgroundColor3=on and Color3.fromRGB(78,99,81)
+            or Color3.fromRGB(64,69,66)
     end
-    redrawers[#redrawers+1]=redraw
-    connect(control.MouseButton1Click,function()
-        set(not get())
-        redrawQuick()
+    redraws[#redraws+1]=redraw
+    connect(row.MouseButton1Click,function()
+        setter(not getter())
+        for _,f in ipairs(redraws) do f() end
     end)
     redraw()
     return redraw
 end
-redrawQuick=function()
-    quickESP.Text="PLAYER ESP: "..(state.playerESP and "ON" or "OFF")
-    quickAlert.Text="KILLER ALERT: "..(state.killerAlert and "ON" or "OFF")
-    quickESP.BackgroundColor3=state.playerESP
-        and Color3.fromRGB(54,87,71) or Color3.fromRGB(45,50,46)
-    quickAlert.BackgroundColor3=state.killerAlert
-        and Color3.fromRGB(54,87,71) or Color3.fromRGB(45,50,46)
-    for _,redraw in ipairs(redrawers) do redraw() end
+local function makeAction(page: ScrollingFrame,heading: string,
+    help: string,callback: () -> ())
+    local row,status=glassRow(page,heading,help)
+    status.Text="›"
+    connect(row.MouseButton1Click,callback)
+    return row
 end
-
-local animations: {Tween}={}
-local function animate(instance: Instance, props: {[string]: any})
-    local tween=TweenService:Create(instance,
+local function makeStat(page: ScrollingFrame,name: string): TextLabel
+    local f=create("Frame",page,{
+        Size=UDim2.new(1,-5,0,64),
+        BackgroundColor3=Color3.fromRGB(55,60,57),
+        BackgroundTransparency=.52,BorderSizePixel=0
+    })
+    round(f,12)
+    local nameLabel=label(f,name,12,6,310,18,10,palette.muted)
+    nameLabel.Size=UDim2.new(1,-24,0,18)
+    local value=label(f,"Checking...",12,28,315,29,12,palette.white)
+    value.Size=UDim2.new(1,-24,0,28)
+    return value
+end
+local modeActions: {() -> ()}={}
+local windowTween: Tween?=nil
+local themeTweens: {Tween}={}
+local function animateTheme(obj: Instance,props: {[string]: any})
+    local t=TweenService:Create(obj,
         TweenInfo.new(.35,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut),
         props)
-    animations[#animations+1]=tween
-    tween:Play()
+    themeTweens[#themeTweens+1]=t
+    t:Play()
 end
-local function renderCard(card: any,name: string,active: boolean)
-    local cfg=Modes[name]
-    card.mode=name
-    card.title.Text=name
-    card.subtitle.Text=cfg.Subtitle
-    card.corner.CornerRadius=UDim.new(0,cfg.Radius)
-    card.innerCorner.CornerRadius=UDim.new(0,cfg.Radius-5)
-    card.sheenCorner.CornerRadius=UDim.new(0,cfg.Radius-4)
-    card.gradient.Color=cfg.Gradient
-    card.edge.Color=cfg.Edge
-    animate(card.frame,{BackgroundColor3=cfg.Tint,
-        BackgroundTransparency=cfg.Alpha})
-    animate(card.stroke,{Color=active and Color3.fromRGB(255,255,249)
-        or cfg.Border,Transparency=active
-        and math.max(0,cfg.BorderAlpha-.22) or cfg.BorderAlpha,
-        Thickness=active and 1.65 or 1.15})
-    animate(card.innerStroke,{Transparency=active and .58 or .86})
-    animate(card.sheen,{BackgroundTransparency=cfg.SheenAlpha})
-    animate(card.gradient,{Offset=active and Vector2.new(0,.08)
-        or Vector2.new(-.14,-.06)})
-    animate(card.edge,{Offset=active and Vector2.new(.14,0)
-        or Vector2.new(-.14,0)})
-    animate(card.scale,{Scale=active and 1.03 or 1})
-    animate(card.title,{TextColor3=Color3.fromRGB(255,255,255)})
-    animate(card.subtitle,{TextColor3=Color3.fromRGB(255,255,255)})
-end
-local function setMode(name: string)
-    if not Modes[name] then return end
-    selectedMode=name
-    player:SetAttribute("GlassMode",name)
-    for _,animation in ipairs(animations) do animation:Cancel() end
-    table.clear(animations)
-    local others={}
-    for _,n in ipairs(names) do
-        if n~=name then others[#others+1]=n end
-    end
-    renderCard(hero,name,true)
-    renderCard(second,others[1],false)
-    renderCard(third,others[2],false)
-    panel:SetAttribute("ActiveGlassMode",name)
-    fadeBlur()
-end
-for _,card in ipairs(cards) do
-    connect(card.hit.MouseButton1Click,function() setMode(card.mode) end)
-end
-local widthTween: Tween?=nil
-local function keepOnScreen()
-    local cam=Workspace.CurrentCamera
-    if not cam then return end
-    local viewport=cam.ViewportSize
-    local right=panel.AbsolutePosition.X+panel.AbsoluteSize.X
-    local target=math.clamp(right,
-        math.min(viewport.X-4,panel.AbsoluteSize.X+4),viewport.X-4)
-    local top=math.clamp(panel.AbsolutePosition.Y,4,
-        math.max(4,viewport.Y-55))
-    panel.Position=UDim2.fromOffset(target,top)
-end
-local function setExpanded(open: boolean)
-    state.expanded=open
-    expandedBody.Visible=open
-    expand.Text=open and "-" or "+"
-    if widthTween then widthTween:Cancel() end
-    local camera=Workspace.CurrentCamera
-    local screenHeight=camera and camera.ViewportSize.Y or 800
-    local availableHeight=math.max(455,screenHeight-70)
-    local expandedHeight=math.min(670,availableHeight)
-    widthTween=TweenService:Create(panel,
+local function syncBlur()
+    if blurTween then blurTween:Cancel() end
+    if not blur then return end
+    local enabled=state.sceneBlur and state.expanded and not state.hidden
+    blur.Enabled=enabled
+    blurTween=TweenService:Create(blur,
         TweenInfo.new(.35,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut),
-        {Size=UDim2.fromOffset(screenWidth(open),open and expandedHeight or 334)})
-    widthTween:Play()
-    fadeBlur()
-    task.delay(.37,function()
-        if state.alive then keepOnScreen() end
+        {Size=enabled and Modes[glassMode].Blur or 0})
+    blurTween:Play()
+end
+local function applyMode(name: string)
+    local style=Modes[name]
+    if not style then return end
+    glassMode=name
+    player:SetAttribute("GlassMode",name)
+    for _,tw in ipairs(themeTweens) do tw:Cancel() end
+    table.clear(themeTweens)
+    panelCorner.CornerRadius=UDim.new(0,style.Radius)
+    sheenCorner.CornerRadius=UDim.new(0,math.max(10,style.Radius-3))
+    panelGradient.Color=ColorSequence.new(style.Tint,style.TintDark)
+    panelRimGradient.Color=ColorSequence.new(
+        Color3.fromRGB(255,255,253),style.Rim)
+    animateTheme(panel,{BackgroundColor3=style.Tint,
+        BackgroundTransparency=style.Transparency})
+    animateTheme(panelRim,{Color=style.Rim,
+        Transparency=style.RimTransparency})
+    animateTheme(sheen,{BackgroundTransparency=style.Sheen})
+    themeText.Text=name:upper().."  /  "..style.Subtitle:upper()
+    for _,redraw in ipairs(modeActions) do redraw() end
+    syncBlur()
+end
+local function ensureVisible()
+    local camera=Workspace.CurrentCamera
+    if not camera then return end
+    local view=camera.ViewportSize
+    local right=panel.AbsolutePosition.X+panel.AbsoluteSize.X
+    right=math.clamp(right,math.min(view.X-5,panel.AbsoluteSize.X+5),view.X-5)
+    local top=math.clamp(panel.AbsolutePosition.Y,5,math.max(5,view.Y-50))
+    panel.Position=UDim2.fromOffset(right,top)
+end
+local function expandWindow(open: boolean)
+    state.expanded=open
+    navStrip.Visible=open
+    mainArea.Visible=open
+    footer.Visible=open
+    miniSummary.Visible=not open
+    minimize.Text=open and "-" or "+"
+    if windowTween then windowTween:Cancel() end
+    windowTween=TweenService:Create(panel,
+        TweenInfo.new(.22,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut),
+        {Size=windowSize(open)})
+    windowTween:Play()
+    syncBlur()
+    task.delay(.24,function()
+        if state.alive then ensureVisible() end
     end)
 end
-connect(expand.MouseButton1Click,function()
-    setExpanded(not state.expanded)
+connect(minimize.MouseButton1Click,function()
+    expandWindow(not state.expanded)
 end)
-local restore=button(gui,"GLASS",0,0,73,47)
-restore.Name="RestoreGlass"
-restore.Position=UDim2.new(1,-88,0,18)
-restore.Visible=false
-restore.TextSize=11
 connect(restore.MouseButton1Click,function()
     panel.Visible=true
-    state.hidden=false
     restore.Visible=false
-    fadeBlur()
+    state.hidden=false
+    syncBlur()
 end)
+-- Correctly drag the title bar, not a mode button over the entire screen.
+local dragging=false
+local dragInput: InputObject?=nil
+local dragStart=Vector3.zero
+local dragOrigin=UDim2.new()
+connect(dragHandle.InputBegan,function(input: InputObject)
+    if input.UserInputType==Enum.UserInputType.MouseButton1
+        or input.UserInputType==Enum.UserInputType.Touch then
+        dragging=true
+        dragInput=input
+        dragStart=input.Position
+        dragOrigin=panel.Position
+    end
+end)
+connect(UserInputService.InputChanged,function(input: InputObject)
+    if dragging and (input==dragInput
+        or input.UserInputType==Enum.UserInputType.MouseMovement) then
+        local delta=input.Position-dragStart
+        panel.Position=UDim2.new(dragOrigin.X.Scale,dragOrigin.X.Offset+delta.X,
+            dragOrigin.Y.Scale,dragOrigin.Y.Offset+delta.Y)
+    end
+end)
+connect(UserInputService.InputEnded,function(input: InputObject)
+    if input==dragInput or input.UserInputType==Enum.UserInputType.MouseButton1 then
+        dragging=false
+        dragInput=nil
+        ensureVisible()
+    end
+end)
+connect(UserInputService.InputBegan,function(input: InputObject,processed: boolean)
+    if not processed and input.KeyCode==Enum.KeyCode.RightControl then
+        panel.Visible=not panel.Visible
+        state.hidden=not panel.Visible
+        restore.Visible=state.hidden
+        syncBlur()
+    end
+end)
+-- Alert outside the window, with the same glass visual language.
+local alert=create("TextLabel",gui,{
+    Name="KillerWarning",AnchorPoint=Vector2.new(.5,0),
+    Position=UDim2.new(.5,0,0,8),
+    Size=UDim2.new(.65,0,0,44),
+    Text="",Visible=false,Font=Enum.Font.GothamMedium,
+    TextColor3=palette.red,TextSize=15,
+    BackgroundColor3=Color3.fromRGB(51,50,46),
+    BackgroundTransparency=.27,BorderSizePixel=0,
+    TextStrokeTransparency=.8
+})
+create("UISizeConstraint",alert,{
+    MinSize=Vector2.new(180,44),MaxSize=Vector2.new(430,44)
+})
+round(alert,19)
+create("UIStroke",alert,{
+    Color=Color3.fromRGB(246,231,209),
+    Transparency=.58,Thickness=1
+})
 
 
 local lightingOriginal={
@@ -646,6 +628,11 @@ local function ensurePlayerVisual(other)
         playerVisuals[other]=existing
     end
     local role,color=roleOf(other)
+    if (role=="Killer" and not state.killerESP) or
+        (role=="Survivor" and not state.survivorESP) then
+        removePlayerVisual(other)
+        return
+    end
     local root=player.Character and player.Character:FindFirstChild("HumanoidRootPart")
     local targetRoot=character:FindFirstChild("HumanoidRootPart")
     local distance=(root and targetRoot)
@@ -658,19 +645,26 @@ local function ensurePlayerVisual(other)
     local selectedKiller=gameValue(other,"SelectedKiller")
     local nick=(role=="Killer" and selectedKiller)
         and tostring(selectedKiller) or other.DisplayName
-    local mask=role=="Killer" and maskLabel(other) or nil
-    local status=isHooked and "HOOKED"
-        or (isKnocked and "KNOCKED" or (isChased and "CHASED" or nil))
+    local mask=(state.playerMask and role=="Killer") and maskLabel(other) or nil
+    local status=(isHooked and state.hookedStatus and "HOOKED")
+        or (isKnocked and state.knockedStatus and "KNOCKED")
+        or (isChased and state.chaseStatus and "CHASED") or nil
     existing.highlight.FillColor=color
     existing.highlight.OutlineColor=color
+    existing.highlight.Enabled=state.playerHighlight and
+        (not distance or distance<=state.espDistance)
+    existing.billboard.MaxDistance=state.espDistance
+    existing.billboard.Enabled=state.playerNames or status~=nil
     existing.text.TextColor3=color
-    existing.text.Text=nick.." ["..role.."]"
-        ..(distance and ("\n"..distance.." studs") or "")
+    existing.text.Text=(state.playerNames and (nick.." ["..role.."]") or "")
+        ..(state.playerDistance and distance and
+            ("\n"..distance.." studs") or "")
         ..(mask and ("\nMask: "..mask) or "")
         ..(status and ("\n"..status) or "")
     local cam=Workspace.CurrentCamera
     if not cam or not state.offscreenESP or
-        (not isChased and role~="Killer") or not targetRoot then
+        (not (isChased and state.chaseStatus) and role~="Killer")
+        or not targetRoot then
         existing.pointer.Visible=false
     else
         local pos,onScreen=cam:WorldToViewportPoint(targetRoot.Position)
@@ -700,6 +694,14 @@ local objectiveKinds={
     {key="hook",title="HOOK",color=Color3.fromRGB(132,255,169)},
     {key="gate",title="GATE",color=Color3.fromRGB(255,255,255)}
 }
+local function objectiveEnabled(kind: string): boolean
+    if kind=="generator" then return state.generatorESP end
+    if kind=="palletwrong" or kind=="pallet" then return state.palletESP end
+    if kind=="window" then return state.windowESP end
+    if kind=="hook" then return state.hookESP end
+    if kind=="gate" then return state.gateESP end
+    return true
+end
 local function classify(candidate)
     local name=candidate.Name:lower()
     if candidate:IsA("ProximityPrompt") then
@@ -733,10 +735,11 @@ local function resolveObjective(candidate,kind)
 end
 local function considerObjective(candidate)
     if not state.alive or not candidate.Parent then return end
-    local map=Workspace:FindFirstChild("Map")
-    if not map or not candidate:IsDescendantOf(map) then return end
     local kind=classify(candidate)
     if not kind then return end
+    local map=Workspace:FindFirstChild("Map")
+    if not map or (not candidate:IsDescendantOf(map) and
+        kind.key~="window") then return end
     local obj,part=resolveObjective(candidate,kind)
     if not obj or not part or objectiveVisuals[obj] then return end
     if state.identifiedObjectives>=90 then return end
@@ -755,8 +758,11 @@ end
 local function refreshObjectiveVisibility()
     for object,v in pairs(objectiveVisuals) do
         if object.Parent and v.part.Parent then
-            v.gui.Enabled=state.objectiveESP
-            if v.kind.key=="generator" then
+            v.gui.Enabled=state.objectiveESP and objectiveEnabled(v.kind.key)
+            v.gui.MaxDistance=state.espDistance
+            v.text.Text=v.kind.title
+            v.text.TextColor3=v.kind.color
+            if v.kind.key=="generator" and state.generatorProgressESP then
                 local percent=tonumber(gameValue(object,"RepairProgress")
                     or gameValue(object,"Progress"))
                 if percent then
@@ -788,8 +794,8 @@ local function startObjectiveScan()
             state.scanProgress="Workspace.Map not found"
             return
         end
-        local objects=map:GetDescendants()
-        state.scanProgress="Analyzing Map: "..#objects.." objects"
+        local objects=Workspace:GetDescendants()
+        state.scanProgress="Analyzing: "..#objects.." objects"
         for i,item in ipairs(objects) do
             if not state.alive or generation~=scanGeneration then return end
             considerObjective(item)
@@ -868,8 +874,15 @@ end
 
 -- ============================================================
 
--- Original game callbacks are retained below; every button is functional.
-toggle(visual,"PLAYER ESP",30,
+
+
+
+-- Feature-first navigation. Each row calls an actual V2 game subsystem.
+local homeCounts=makeStat(homePage,"PLAYERS  /  OBJECTIVES")
+local homeKiller=makeStat(homePage,"KILLER PROXIMITY")
+local homeSkill=makeStat(homePage,"SKILL CHECK")
+local homeNext=makeStat(homePage,"NEXT KILLER (ESTIMATE)")
+makeToggle(homePage,"PLAYER ESP","Show markers for nearby players",
     function() return state.playerESP end,
     function(v)
         state.playerESP=v
@@ -877,140 +890,163 @@ toggle(visual,"PLAYER ESP",30,
             for p in pairs(playerVisuals) do removePlayerVisual(p) end
         end
     end)
-toggle(visual,"OBJECTIVE ESP",74,
+makeToggle(homePage,"OBJECTIVE ESP","Map generator and interactable markers",
     function() return state.objectiveESP end,
     function(v) state.objectiveESP=v;refreshObjectiveVisibility() end)
-toggle(visual,"FULLBRIGHT",118,
-    function() return state.fullbright end,
-    function(v) state.fullbright=v;updateLighting() end)
-toggle(visual,"NO FOG",162,
-    function() return state.noFog end,
-    function(v) state.noFog=v;updateLighting() end)
-local fov=button(visual,"CAMERA FOV: 70",0,206,100,44)
-fov.Position=UDim2.new(.03,0,0,206)
-fov.Size=UDim2.new(.94,0,0,44)
-connect(fov.MouseButton1Click,function()
-    local options={[70]=85,[85]=100,[100]=70}
-    state.fov=options[state.fov] or 70
-    fov.Text="CAMERA FOV: "..state.fov
-    cameraFov()
-end)
 
-toggle(playerPage,"NOCLIP",30,
-    function() return state.noClip end,setNoClip)
-toggle(playerPage,"SPEED ASSIST",74,
-    function() return state.speed end,setSpeed)
-local speedButton=button(playerPage,"SPEED VALUE: 24",0,118,100,44)
-speedButton.Position=UDim2.new(.03,0,0,118)
-speedButton.Size=UDim2.new(.94,0,0,44)
-connect(speedButton.MouseButton1Click,function()
-    local options={[24]=28,[28]=32,[32]=20,[20]=24}
-    state.speedValue=options[state.speedValue] or 24
-    speedButton.Text="SPEED VALUE: "..state.speedValue
-end)
-toggle(playerPage,"KILLER PROXIMITY ALERT",162,
-    function() return state.killerAlert end,
-    function(v) state.killerAlert=v end)
-toggle(playerPage,"OFFSCREEN INDICATORS",206,
+makeToggle(playersPage,"PLAYER ESP MASTER","Enable player outlines and nametags",
+    function() return state.playerESP end,
+    function(v)
+        state.playerESP=v
+        if not v then
+            for p in pairs(playerVisuals) do removePlayerVisual(p) end
+        end
+    end)
+makeToggle(playersPage,"KILLER ESP","Mark players identified as killers",
+    function() return state.killerESP end,
+    function(v) state.killerESP=v end)
+makeToggle(playersPage,"SURVIVOR ESP","Mark players identified as survivors",
+    function() return state.survivorESP end,
+    function(v) state.survivorESP=v end)
+makeToggle(playersPage,"PLAYER HIGHLIGHT","Outlines through map objects",
+    function() return state.playerHighlight end,
+    function(v) state.playerHighlight=v end)
+makeToggle(playersPage,"PLAYER NAMETAGS","Display names and selected killers",
+    function() return state.playerNames end,
+    function(v) state.playerNames=v end)
+makeToggle(playersPage,"DISTANCE ESP","Display distance in studs",
+    function() return state.playerDistance end,
+    function(v) state.playerDistance=v end)
+makeToggle(playersPage,"KILLER MASK ESP","Show mask names when replicated",
+    function() return state.playerMask end,
+    function(v) state.playerMask=v end)
+makeToggle(playersPage,"CHASED INDICATORS","Flag chased players with status",
+    function() return state.chaseStatus end,
+    function(v) state.chaseStatus=v end)
+makeToggle(playersPage,"KNOCKED STATUS","Highlight players who are knocked",
+    function() return state.knockedStatus end,
+    function(v) state.knockedStatus=v end)
+makeToggle(playersPage,"HOOKED STATUS","Highlight players on hooks",
+    function() return state.hookedStatus end,
+    function(v) state.hookedStatus=v end)
+makeToggle(playersPage,"OFFSCREEN INDICATORS","Show killer/chased direction at screen edge",
     function() return state.offscreenESP end,
     function(v) state.offscreenESP=v end)
+makeToggle(playersPage,"KILLER DISTANCE ALERT","Warn when known killer is under 99 studs",
+    function() return state.killerAlert end,
+    function(v) state.killerAlert=v end)
 
-local homeCounts=label(dashboard,"Players: --  /  Objectives: --",
-    13,29,300,34,15,palette.white)
-homeCounts.Size=UDim2.new(.94,0,0,34)
-local homeKiller=label(dashboard,"Killer: checking",
-    13,67,300,28,12,palette.muted)
-homeKiller.Size=UDim2.new(.94,0,0,28)
-local homeSkill=label(dashboard,"Skill Check: waiting",
-    13,98,300,46,11,palette.muted)
-homeSkill.Size=UDim2.new(.94,0,0,46)
-toggle(dashboard,"PLAYER ESP",154,
-    function() return state.playerESP end,
-    function(v)
-        state.playerESP=v
-        if not v then
-            for p in pairs(playerVisuals) do removePlayerVisual(p) end
-        end
-    end)
-toggle(dashboard,"OBJECTIVE ESP",198,
+makeToggle(objectsPage,"OBJECTIVE ESP MASTER","Show map objective markers",
     function() return state.objectiveESP end,
     function(v) state.objectiveESP=v;refreshObjectiveVisibility() end)
+makeToggle(objectsPage,"GENERATOR ESP","Show generators found inside map",
+    function() return state.generatorESP end,
+    function(v) state.generatorESP=v;refreshObjectiveVisibility() end)
+makeToggle(objectsPage,"GENERATOR PROGRESS","RepairProgress / Progress attributes",
+    function() return state.generatorProgressESP end,
+    function(v) state.generatorProgressESP=v;refreshObjectiveVisibility() end)
+makeToggle(objectsPage,"PALLET ESP","Pallet and Palletwrong",
+    function() return state.palletESP end,
+    function(v) state.palletESP=v;refreshObjectiveVisibility() end)
+makeToggle(objectsPage,"WINDOW ESP","Highlight Window instances",
+    function() return state.windowESP end,
+    function(v) state.windowESP=v;refreshObjectiveVisibility() end)
+makeToggle(objectsPage,"HOOK ESP","Show hook locations",
+    function() return state.hookESP end,
+    function(v) state.hookESP=v;refreshObjectiveVisibility() end)
+makeToggle(objectsPage,"GATE ESP","Show map exit gates",
+    function() return state.gateESP end,
+    function(v) state.gateESP=v;refreshObjectiveVisibility() end)
+makeAction(objectsPage,"REFRESH MAP OBJECTS","Re-scan Workspace for replicated instances",
+    function() startObjectiveScan() end)
+local objectiveInfo=makeStat(objectsPage,"OBJECTIVE SCANNER")
 
-local refreshButton=button(objectivesPage,"REFRESH OBJECTIVES",0,32,100,46)
-refreshButton.Position=UDim2.new(.03,0,0,32)
-refreshButton.Size=UDim2.new(.94,0,0,46)
-connect(refreshButton.MouseButton1Click,startObjectiveScan)
-local objectiveInfo=label(objectivesPage,"Scanning Workspace.Map",
-    13,80,300,85,11,palette.muted)
-objectiveInfo.Size=UDim2.new(.94,0,0,89)
-local skillInfo=label(objectivesPage,"Skill Check: Waiting for GUI",
-    13,167,300,70,11,palette.muted)
-skillInfo.Size=UDim2.new(.94,0,0,65)
+makeToggle(survivorPage,"AUTO SKILL CHECK","Try the original mobile action when aligned",
+    function() return state.autoSkillCheck end,
+    function(v)
+        state.autoSkillCheck=v
+        state.inputStatus=v and "Enabled; waiting for Skill Check" or "Disabled"
+    end)
+makeToggle(survivorPage,"SKILL CHECK MONITOR","Show current angle and target window",
+    function() return state.skillMonitor end,
+    function(v) state.skillMonitor=v end)
+makeToggle(survivorPage,"NEXT KILLER ESTIMATE","Use AllowKiller and KillerChance",
+    function() return state.nextKiller end,
+    function(v) state.nextKiller=v end)
+local skillInfo=makeStat(survivorPage,"SKILL CHECK STATUS")
+local autoInputInfo=makeStat(survivorPage,"AUTO INPUT DIAGNOSTIC")
+makeAction(survivorPage,"REFRESH GAME UI STATUS","Re-read SkillCheckPromptGui",
+    function()
+        state.inputStatus="Checking UI path"
+    end)
 
-toggle(settingsPage,"SCENE BLUR (FULL SCREEN)",30,
-    function() return sceneBlurEnabled end,
-    function(v) sceneBlurEnabled=v;fadeBlur() end)
-local scaleButton=button(settingsPage,"HUD SCALE: 100%",0,77,100,44)
-scaleButton.Position=UDim2.new(.03,0,0,77)
-scaleButton.Size=UDim2.new(.94,0,0,44)
-local scales={1,.9,.8}
-local scaleIndex=1
-connect(scaleButton.MouseButton1Click,function()
-    scaleIndex=scaleIndex%#scales+1
-    hudScale.Scale=scales[scaleIndex]
-    scaleButton.Text="HUD SCALE: "..math.floor(scales[scaleIndex]*100).."%"
-    task.defer(keepOnScreen)
-end)
-local reset=button(settingsPage,"RESET HUD POSITION",0,122,100,44)
-reset.Position=UDim2.new(.03,0,0,122)
-reset.Size=UDim2.new(.94,0,0,44)
-connect(reset.MouseButton1Click,function()
-    panel.Position=UDim2.new(1,-16,0,16)
-    task.defer(keepOnScreen)
-end)
-local collapse=button(settingsPage,"RETURN TO MINI HUD",0,169,100,44)
-collapse.Position=UDim2.new(.03,0,0,169)
-collapse.Size=UDim2.new(.94,0,0,44)
-connect(collapse.MouseButton1Click,function() setExpanded(false) end)
-label(settingsPage,
-    "Global blur, not per-panel  |  Player.GlassMode",
-    13,216,310,22,10,palette.muted)
-connect(quickESP.MouseButton1Click,function()
-    state.playerESP=not state.playerESP
-    if not state.playerESP then
-        for p in pairs(playerVisuals) do removePlayerVisual(p) end
+makeToggle(movementPage,"NOCLIP","Local character collision toggle",
+    function() return state.noClip end,setNoClip)
+makeToggle(movementPage,"SPEED ASSIST","Apply local Humanoid WalkSpeed",
+    function() return state.speed end,setSpeed)
+local speedButton=makeAction(movementPage,"SPEED VALUE: 24",
+    "Tap to cycle 24 / 28 / 32 / 20",
+    function()
+        local choices={[24]=28,[28]=32,[32]=20,[20]=24}
+        state.speedValue=choices[state.speedValue] or 24
+    end)
+local movementStat=makeStat(movementPage,"CURRENT WALK SPEED")
+
+makeToggle(visualPage,"FULLBRIGHT","Local lighting and ambient boost",
+    function() return state.fullbright end,
+    function(v) state.fullbright=v;updateLighting() end)
+makeToggle(visualPage,"NO FOG","Reduce fog and atmospheric haze",
+    function() return state.noFog end,
+    function(v) state.noFog=v;updateLighting() end)
+makeAction(visualPage,"CAMERA FOV","Cycle 70 / 85 / 100 degrees",
+    function()
+        local cycle={[70]=85,[85]=100,[100]=70}
+        state.fov=cycle[state.fov] or 70
+        cameraFov()
+    end)
+makeAction(visualPage,"ESP RANGE","Cycle 350 / 650 / 1000 / 2000 studs",
+    function()
+        local cycle={[350]=650,[650]=1000,[1000]=2000,[2000]=350}
+        state.espDistance=cycle[state.espDistance] or 650
+        refreshObjectiveVisibility()
+    end)
+local visualInfo=makeStat(visualPage,"VISUAL SETTINGS")
+
+for _,name in ipairs({"Frosted","Clear","Blur"}) do
+    local modeName=name
+    local action=makeAction(settingsPage,modeName:upper().."  /  "..Modes[modeName].Subtitle,
+        "Use this glass theme for the dashboard",function()
+            applyMode(modeName)
+        end)
+    local leftLabel=action:FindFirstChildOfClass("TextLabel")
+    local function displayActive()
+        action.BackgroundColor3=glassMode==modeName
+            and Color3.fromRGB(103,116,104) or Color3.fromRGB(66,70,66)
     end
-    redrawQuick()
-end)
-connect(quickAlert.MouseButton1Click,function()
-    state.killerAlert=not state.killerAlert
-    redrawQuick()
-end)
-choosePage("Dashboard")
-redrawQuick()
-setMode(selectedMode)
+    modeActions[#modeActions+1]=displayActive
+end
+makeToggle(settingsPage,"SCENE BLUR (GLOBAL)","Off by default; affects all 3D scenery",
+    function() return state.sceneBlur end,
+    function(v) state.sceneBlur=v;syncBlur() end)
+local scaleIndex=1
+local scaleChoices={1,.9,.8}
+makeAction(settingsPage,"HUD SCALE","Tap to cycle 100 / 90 / 80 percent",
+    function()
+        scaleIndex=scaleIndex%3+1
+        hudScale.Scale=scaleChoices[scaleIndex]
+        task.defer(ensureVisible)
+    end)
+makeAction(settingsPage,"RESET HUD POSITION","Return window to the top-right",
+    function()
+        panel.Position=UDim2.new(1,-17,0,18)
+        task.defer(ensureVisible)
+    end)
+makeAction(settingsPage,"REFRESH OBJECTS","Scan map again",
+    function() startObjectiveScan() end)
+local settingsInfo=makeStat(settingsPage,"SELECTED GLASS STYLE")
+switchTab("Home")
+applyMode(glassMode)
 
-
-local alert=create("TextLabel",gui,{
-    Name="KillerWarning",AnchorPoint=Vector2.new(.5,0),
-    Position=UDim2.new(.5,0,0,10),
-    Size=UDim2.new(.65,0,0,44),
-    Text="",Visible=false,Font=Enum.Font.GothamMedium,TextSize=15,
-    TextScaled=false,TextColor3=palette.red,
-    BackgroundColor3=Color3.fromRGB(35,30,31),
-    BackgroundTransparency=.35,BorderSizePixel=0,
-    TextStrokeTransparency=.8
-})
-create("UISizeConstraint",alert,{
-    MinSize=Vector2.new(220,44),MaxSize=Vector2.new(460,44)
-})
-round(alert,20)
-create("UIStroke",alert,{
-    Color=Color3.fromRGB(229,199,186),Transparency=.62,Thickness=1
-})
-create("UIGradient",alert,{
-    Color=Modes.Blur.Gradient,Rotation=10
-})
 
 local function estimateNextKiller()
     local candidates=Players:GetPlayers()
@@ -1043,81 +1079,145 @@ local function checkSkillUi()
     return string.format("Skill Check: %s\nangle %.0f / goal %.0f",
         hit and "TARGET WINDOW" or "outside",current,goal.Rotation%360)
 end
+
+
+
 local lastUpdate=0
-connect(RunService.Heartbeat,function(dt)
+connect(RunService.Heartbeat,function()
     if not state.alive then return end
     local now=os.clock()
     if now-lastUpdate<.25 then return end
     lastUpdate=now
     updateNoClip()
     updateSpeed()
-    local char=player.Character
-    local root=char and char:FindFirstChild("HumanoidRootPart")
-    local closestKiller=math.huge
+    local character=player.Character
+    local myRoot=character and character:FindFirstChild("HumanoidRootPart")
+    local closest=math.huge
     local closestName=""
-    if state.playerESP or state.killerAlert then
-        for _,other in ipairs(Players:GetPlayers()) do
-            if other~=player then
-                if state.playerESP then ensurePlayerVisual(other) end
-                if state.killerAlert and root then
-                    local role=roleOf(other)
-                    if role=="Killer" then
-                        local theirRoot=other.Character
-                            and other.Character:FindFirstChild("HumanoidRootPart")
-                        if theirRoot then
-                            local distance=(root.Position-theirRoot.Position).Magnitude
-                            if distance<closestKiller then
-                                closestKiller=distance
-                                closestName=other.DisplayName
-                            end
+    local players=Players:GetPlayers()
+    for _,other in ipairs(players) do
+        if other~=player then
+            if state.playerESP then ensurePlayerVisual(other) end
+            if state.killerAlert and myRoot then
+                local role=roleOf(other)
+                if role=="Killer" then
+                    local hisRoot=other.Character and
+                        other.Character:FindFirstChild("HumanoidRootPart")
+                    if hisRoot then
+                        local dist=(myRoot.Position-hisRoot.Position).Magnitude
+                        if dist<closest then
+                            closest=dist;closestName=other.DisplayName
                         end
                     end
                 end
             end
         end
     end
-    alert.Text=(state.killerAlert and closestKiller<99)
-        and string.format("KILLER NEARBY: %s (%d studs)",
-            closestName,math.floor(closestKiller))
-        or ""
-    alert.Visible=(alert.Text~="")
-    local team=player.Team and player.Team.Name:lower() or ""
-    local lobby=(team:find("lobby",1,true)
-        or team:find("spectator",1,true))~=nil
-    objectiveInfo.Text="Detected objectives: "..state.identifiedObjectives
-        .."\nScanner: "..state.scanProgress
-        .."\nObjective ESP: "..(state.objectiveESP and "ON" or "OFF")
-        ..(lobby and ("\nNext Killer (estimate): "..estimateNextKiller()) or "")
-    skillInfo.Text=checkSkillUi()
+    local inDanger=state.killerAlert and closest<99
+    local warning=inDanger and ("KILLER NEARBY: "..closestName
+        .." ("..math.floor(closest).." studs)") or
+        (state.killerAlert and "No known killer nearby" or "Alert disabled")
+    alert.Text=inDanger and warning or ""
+    alert.Visible=inDanger
     refreshObjectiveVisibility()
-    local hum=char and char:FindFirstChildOfClass("Humanoid")
-    local speedState=hum and string.format(" | Speed %.0f",hum.WalkSpeed) or ""
-    local totalPlayers=#Players:GetPlayers()
-    local dangerous=(state.killerAlert and closestKiller<99)
-    local killerText=dangerous
-        and ("KILLER NEARBY: "..math.floor(closestKiller).." studs")
-        or "KILLER: CLEAR / UNKNOWN"
-    footer.Text="Players: "..totalPlayers.."  |  Objectives: "
-        ..state.identifiedObjectives..speedState.." | RIGHT CTRL: HIDE"
-    hudStatus.Text=string.format("PLAYERS %d | OBJECTIVES %d | %s",
-        totalPlayers,state.identifiedObjectives,
-        dangerous and "KILLER NEARBY" or "CLEAR / UNKNOWN")
-    hudStatus.TextColor3=dangerous and palette.red or palette.white
-    homeCounts.Text=string.format("%d PLAYERS / %d OBJECTIVES",
-        totalPlayers,state.identifiedObjectives)
-    homeKiller.Text=killerText
-    homeKiller.TextColor3=dangerous and palette.red or palette.muted
-    homeSkill.Text=checkSkillUi()
-    local wanted=screenWidth(state.expanded)
-    if (not widthTween or widthTween.PlaybackState~=Enum.PlaybackState.Playing)
-        and math.abs(panel.Size.X.Offset-wanted)>2 then
-        panel.Size=UDim2.fromOffset(wanted,panel.Size.Y.Offset)
-        keepOnScreen()
+    local count=state.identifiedObjectives
+    homeCounts.Text=#players.." players  •  "..count.." objects"
+    homeKiller.Text=warning
+    homeKiller.TextColor3=inDanger and palette.red or palette.white
+    local skillStatus=state.skillMonitor and checkSkillUi()
+        or "Monitor disabled"
+    homeSkill.Text=skillStatus
+    local team=player.Team and player.Team.Name:lower() or ""
+    local lobby=(team:find("lobby",1,true) or
+        team:find("spectator",1,true))~=nil
+    local estimate=state.nextKiller and
+        (lobby and estimateNextKiller() or "Visible in lobby") or "Disabled"
+    homeNext.Text=estimate
+    skillInfo.Text=skillStatus
+    autoInputInfo.Text=state.inputStatus
+    objectiveInfo.Text=state.scanProgress.."  |  "..count.." objects"
+    visualInfo.Text="FOV "..state.fov.."  |  ESP Range "..state.espDistance.." studs"
+    settingsInfo.Text=glassMode.." / "..Modes[glassMode].Subtitle
+        .."  |  HUD "..math.floor(hudScale.Scale*100).."%"
+    local hum=character and character:FindFirstChildOfClass("Humanoid")
+    movementStat.Text=hum and
+        ("WalkSpeed: "..hum.WalkSpeed.."; Assist: "
+            ..(state.speed and "ON" or "OFF")) or "No humanoid"
+    local miniWarning=inDanger and "KILLER NEARBY" or "CLEAR / UNKNOWN"
+    miniSummary.Text="# "..#players.." PLAYERS   |   "..count
+        .." OBJECTIVES   |   "..miniWarning
+    footerText.Text="PLAYERS "..#players.."  •  OBJECTIVES "..count
+        .."  •  "..(inDanger and "KILLER NEARBY" or "READY")
+    if windowTween==nil or windowTween.PlaybackState~=Enum.PlaybackState.Playing then
+        local required=windowSize(state.expanded)
+        if math.abs(panel.Size.X.Offset-required.X.Offset)>2 or
+            math.abs(panel.Size.Y.Offset-required.Y.Offset)>2 then
+            panel.Size=required
+            ensureVisible()
+        end
     end
 end)
-
+-- Reproduce the reference's optional skill-check input attempt. This does
+-- not claim that a game/server accepts the simulated touch event.
+local inputAttempted=false
+local touchId=8822
+connect(RunService.Heartbeat,function()
+    if not state.alive or not state.autoSkillCheck then
+        inputAttempted=false
+        return
+    end
+    if not player.Team or player.Team.Name~="Survivors" then return end
+    local prompt=playerGui:FindFirstChild("SkillCheckPromptGui")
+    local check=prompt and prompt:FindFirstChild("Check")
+    if not check or not check:IsA("GuiObject") or not check.Visible then
+        inputAttempted=false
+        return
+    end
+    if inputAttempted then return end
+    local line=check:FindFirstChild("Line")
+    local goal=check:FindFirstChild("Goal")
+    if not line or not goal or not line:IsA("GuiObject")
+        or not goal:IsA("GuiObject") then
+        state.inputStatus="Line/Goal not found"
+        return
+    end
+    local rotation=line.Rotation%360
+    local ss=(goal.Rotation+101)%360
+    local se=(goal.Rotation+115)%360
+    local inside=(ss>se and (rotation>=ss or rotation<=se))
+        or (rotation>=ss and rotation<=se)
+    if not inside then return end
+    inputAttempted=true
+    local guiItem: Instance?=playerGui
+    for seg in string.gmatch("Survivor-mob.Controls.action.check","[^%.]+") do
+        guiItem=guiItem and guiItem:FindFirstChild(seg) or nil
+    end
+    if not guiItem or not guiItem:IsA("GuiObject") then
+        state.inputStatus="Action GUI not found"
+        return
+    end
+    local ok,reason=pcall(function()
+        local vim=game:GetService("VirtualInputManager")
+        local g=game:GetService("GuiService")
+        local inset=g:GetGuiInset()
+        local position=guiItem.AbsolutePosition
+        local size=guiItem.AbsoluteSize
+        local x=position.X+size.X/2+inset.X
+        local y=position.Y+size.Y/2+inset.Y
+        vim:SendTouchEvent(touchId,0,x,y)
+        task.delay(.04,function()
+            if state.alive then
+                pcall(function()
+                    vim:SendTouchEvent(touchId,2,x,y)
+                end)
+            end
+        end)
+    end)
+    state.inputStatus=ok and "Touch sent (NOT confirmed by game)"
+        or ("Touch unavailable: "..tostring(reason):sub(1,74))
+end)
 connect(Players.PlayerRemoving,removePlayerVisual)
-connect(Lighting.ChildAdded,function(child)
+connect(Lighting.ChildAdded,function()
     if state.alive and (state.fullbright or state.noFog) then
         task.defer(updateLighting)
     end
@@ -1125,76 +1225,36 @@ end)
 connect(Workspace:GetPropertyChangedSignal("CurrentCamera"),function()
     if state.alive then cameraFov() end
 end)
-
--- Drag only from the title area, keeping close/expand buttons reliable.
--- Replaces old drag, minimize and hotkey listeners.
-local dragging=false
-local dragInput: InputObject?=nil
-local dragStart=Vector3.zero
-local dragOrigin=UDim2.new()
-connect(hero.hit.InputBegan,function(input: InputObject)
-    if input.UserInputType==Enum.UserInputType.MouseButton1
-        or input.UserInputType==Enum.UserInputType.Touch then
-        dragging=true
-        dragInput=input
-        dragStart=input.Position
-        dragOrigin=panel.Position
-    end
-end)
-connect(UserInputService.InputChanged,function(input: InputObject)
-    if dragging and (input==dragInput
-        or input.UserInputType==Enum.UserInputType.MouseMovement) then
-        local d=input.Position-dragStart
-        panel.Position=UDim2.new(dragOrigin.X.Scale,dragOrigin.X.Offset+d.X,
-            dragOrigin.Y.Scale,dragOrigin.Y.Offset+d.Y)
-    end
-end)
-connect(UserInputService.InputEnded,function(input: InputObject)
-    if input==dragInput or input.UserInputType==Enum.UserInputType.MouseButton1 then
-        dragging=false
-        dragInput=nil
-        keepOnScreen()
-    end
-end)
-connect(UserInputService.InputBegan,function(input: InputObject,processed: boolean)
-    if not processed and input.KeyCode==Enum.KeyCode.RightControl then
-        panel.Visible=not panel.Visible
-        state.hidden=not panel.Visible
-        restore.Visible=state.hidden
-        fadeBlur()
-    end
-end)
-
-
 local function cleanup()
     if not state.alive then return end
     state.alive=false
     scanGeneration+=1
-    if widthTween then widthTween:Cancel() end
+    if windowTween then windowTween:Cancel() end
     if blurTween then blurTween:Cancel() end
-    for _,t in ipairs(animations) do pcall(function() t:Cancel() end) end
-    for _,connection in ipairs(connections) do
-        pcall(function() connection:Disconnect() end)
+    for _,tw in ipairs(themeTweens) do
+        pcall(function() tw:Cancel() end)
+    end
+    for _,conn in ipairs(connections) do
+        pcall(function() conn:Disconnect() end)
     end
     table.clear(connections)
     for other in pairs(playerVisuals) do removePlayerVisual(other) end
-    for object,visual in pairs(objectiveVisuals) do
-        visual.gui:Destroy()
-        objectiveVisuals[object]=nil
+    for obj,v in pairs(objectiveVisuals) do
+        v.gui:Destroy();objectiveVisuals[obj]=nil
     end
     setNoClip(false)
     state.fullbright=false
     state.noFog=false
     updateLighting()
+    if state.speed then setSpeed(false) end
     local camera=Workspace.CurrentCamera
     if camera then camera.FieldOfView=originalFOV end
-    if state.speed then setSpeed(false) end
     gui:Destroy()
     if blur and blur.Parent then
         if blurCreated then blur:Destroy()
         else
-            blur.Size=priorBlurSize
-            blur.Enabled=priorBlurEnabled
+            blur.Size=originalBlurSize
+            blur.Enabled=originalBlurEnabled
         end
     end
     if environment.VelionVDCleanup==cleanup then
@@ -1203,6 +1263,5 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 connect(close.MouseButton1Click,cleanup)
-choosePage("Visual")
 startObjectiveScan()
-print("[Velion Glass V2.2] Frosted/Clear/Blur installed. Roblox Studio runtime not tested.")
+print("[Velion District V3] Feature-first glass dashboard loaded. Studio runtime unverified.")
