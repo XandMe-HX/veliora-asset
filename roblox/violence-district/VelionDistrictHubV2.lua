@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V4.0 - FLUENT UI
+    VELION DISTRICT HUB V4.1 - WORLD ESP V2
     For Roblox Violence District - client-side utility module.
     Clean, readable Luau. No external UI libraries, telemetry or extra loaders.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -42,6 +42,9 @@ local state = {
     generatorESP=true, palletESP=true, windowESP=true, hookESP=true,
     gateESP=true, generatorProgressESP=true, espDistance=650,
     identifiedObjectives=0, unknownRoles=0,
+    maxWorldLabels=22, maxWorldHighlights=20, objectLabels=true,
+    scanCandidates=0, scanScanned=0, scanDurationMs=0,
+    visibleLabels=0, visibleHighlights=0, fps=60,
 }
 local palette = {
     bg=Color3.fromRGB(26,28,27),
@@ -177,7 +180,7 @@ local uiHeight=math.min(490,math.max(320,cameraSize.Y-80))
 local createdWindow,Window=pcall(function()
     return Fluent:CreateWindow({
         Title="VELION | VIOLENCE DISTRICT",
-        SubTitle="V4.0 / Fluent Hub",
+        SubTitle="V4.1 / World ESP V2",
         TabWidth=cameraSize.X<500 and 116 or 150,
         Size=UDim2.fromOffset(uiWidth,uiHeight),
         Acrylic=true,Theme="Dark",
@@ -427,157 +430,304 @@ local function ensurePlayerVisual(other)
     end
 end
 
+-- WORLD ESP V2: map-only discovery, lazy rendering and strict visibility caps.
+-- High-instance-count lobby objects, cosmetic preview models and fake
+-- characters are deliberately excluded by the Workspace.Map scope.
 local objectiveKinds={
-    {key="generator",title="GENERATOR",color=Color3.fromRGB(150,0,200)},
-    {key="palletwrong",title="PALLET",color=Color3.fromRGB(74,255,181)},
-    {key="pallet",title="PALLET",color=Color3.fromRGB(74,255,181)},
-    {key="window",title="WINDOW",color=Color3.fromRGB(74,255,181)},
-    {key="hook",title="HOOK",color=Color3.fromRGB(132,255,169)},
-    {key="gate",title="GATE",color=Color3.fromRGB(255,255,255)}
+    {name="Generator",key="generator",priority=145},
+    {name="ExitGate",key="gate",priority=115},
+    {name="Gate",key="gate",priority=115},
+    {name="Hook",key="hook",priority=80},
+    {name="Palletwrong",key="pallet",priority=55},
+    {name="Pallet",key="pallet",priority=55},
+    {name="Window",key="window",priority=18}
 }
+local currentMap: Instance?=nil
+local scanGeneration=0
+local lastObjectiveRefresh=0
+
 local function objectiveEnabled(kind: string): boolean
     if kind=="generator" then return state.generatorESP end
-    if kind=="palletwrong" or kind=="pallet" then return state.palletESP end
+    if kind=="pallet" then return state.palletESP end
     if kind=="window" then return state.windowESP end
     if kind=="hook" then return state.hookESP end
     if kind=="gate" then return state.gateESP end
-    return true
+    return false
 end
-local function classify(candidate)
-    local name=candidate.Name:lower()
-    if candidate:IsA("ProximityPrompt") then
-        name=name.." "..candidate.ActionText:lower()
-            .." "..candidate.ObjectText:lower()
+
+-- Accept exact objective names and optional numeric suffixes only.
+-- 'WindowFrame', 'Gatehouse' and other decorative names do not qualify.
+local function classifyObjective(candidate: Instance)
+    if not candidate:IsA("Model") and not candidate:IsA("BasePart") then
+        return nil
     end
-    for _,definition in ipairs(objectiveKinds) do
-        if name:find(definition.key,1,true) then return definition end
+    local canonical=candidate.Name:lower():gsub("[%s_%-]","")
+    for _,kind in ipairs(objectiveKinds) do
+        local target=kind.name:lower()
+        if canonical==target or canonical:match("^"..target.."%d+$") then
+            return kind
+        end
     end
     return nil
 end
-local function resolveObjective(candidate,kind)
-    -- Prefer the actual named object instead of its possibly huge Map model.
-    if candidate:IsA("Model") then
-        local base=candidate.PrimaryPart
-            or candidate:FindFirstChildWhichIsA("BasePart",true)
-        if base then return candidate,base end
-    elseif candidate:IsA("BasePart") then
-        local parent=candidate.Parent
-        if parent and parent:IsA("Model") and classify(parent) then
-            return parent,parent.PrimaryPart or candidate
-        end
-        return candidate,candidate
-    elseif candidate:IsA("ProximityPrompt") then
-        local parent=candidate.Parent
-        if parent and parent:IsA("BasePart") then
-            return parent,parent
-        end
+
+local function locateObjective(candidate: Instance)
+    local kind=classifyObjective(candidate)
+    if not kind then return nil,nil,nil end
+    if not currentMap or not candidate:IsDescendantOf(currentMap) then
+        return nil,nil,nil
     end
-    return nil,nil
+    -- Prefer the named Model over its nested parts to avoid duplicate markers.
+    if candidate:IsA("BasePart") then
+        local parent=candidate.Parent
+        if parent and parent:IsA("Model") and classifyObjective(parent) then
+            return nil,nil,nil
+        end
+        return candidate,candidate,kind
+    end
+    local model=candidate :: Model
+    local part=model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart",true)
+    if part then return model,part,kind end
+    return nil,nil,nil
 end
-local function considerObjective(candidate)
+
+local function destroyObjectiveNodes(record)
+    if record.gui then record.gui:Destroy();record.gui=nil end
+    if record.highlight then record.highlight:Destroy();record.highlight=nil end
+    record.text=nil
+end
+local function removeObjectiveRecord(obj: Instance)
+    local record=objectiveVisuals[obj]
+    if not record then return end
+    destroyObjectiveNodes(record)
+    objectiveVisuals[obj]=nil
+    state.identifiedObjectives=math.max(0,state.identifiedObjectives-1)
+end
+local function clearObjectives()
+    for obj in pairs(objectiveVisuals) do removeObjectiveRecord(obj) end
+    state.identifiedObjectives=0
+    state.visibleLabels=0
+    state.visibleHighlights=0
+end
+
+local function considerObjective(candidate: Instance)
     if not state.alive or not candidate.Parent then return end
-    local kind=classify(candidate)
-    if not kind then return end
-    local map=Workspace:FindFirstChild("Map")
-    if not map or (not candidate:IsDescendantOf(map) and
-        kind.key~="window") then return end
-    local obj,part=resolveObjective(candidate,kind)
-    if not obj or not part or objectiveVisuals[obj] then return end
-    if state.identifiedObjectives>=90 then return end
-    local outline=create("Highlight",Workspace,{
-        Name="VelionVDObjectiveOutline",Adornee=obj,
-        Enabled=state.objectiveESP and objectiveEnabled(kind.key),
-        FillColor=categoryColor(kind.key),OutlineColor=categoryColor(kind.key),
-        FillTransparency=.86,OutlineTransparency=.15,
-        DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
-    })
-    local billboard=create("BillboardGui",playerGui,{
-        Name="VelionVDObjective",Adornee=part,
-        Size=UDim2.fromOffset(168,26),AlwaysOnTop=true,
-        MaxDistance=state.espDistance,
-        Enabled=state.objectiveESP and objectiveEnabled(kind.key),
-        StudsOffsetWorldSpace=Vector3.new(0,3.2,0)
-    })
-    local tag=label(billboard,kind.title,0,0,168,26,12,categoryColor(kind.key))
-    tag.TextStrokeTransparency=.2
-    tag.TextXAlignment=Enum.TextXAlignment.Center
-    objectiveVisuals[obj]={gui=billboard,highlight=outline,kind=kind,part=part,text=tag}
+    local obj,part,kind=locateObjective(candidate)
+    if not obj or not part or not kind or objectiveVisuals[obj] then return end
+    objectiveVisuals[obj]={
+        obj=obj,part=part,kind=kind,
+        gui=nil,highlight=nil,text=nil,lastVisible=0
+    }
     state.identifiedObjectives+=1
 end
-local function refreshObjectiveVisibility()
-    for object,v in pairs(objectiveVisuals) do
-        if object.Parent and v.part.Parent then
-            local show=state.objectiveESP and objectiveEnabled(v.kind.key)
-            v.gui.Enabled=show
-            if v.highlight then v.highlight.Enabled=show end
-            v.gui.MaxDistance=state.espDistance
-            local ownRoot=player.Character and
-                player.Character:FindFirstChild("HumanoidRootPart")
-            local within=(not ownRoot or
-                (ownRoot.Position-v.part.Position).Magnitude<=state.espDistance)
-            if v.highlight then
-                v.highlight.Enabled=show and within and state.objectHighlight
-                highlightStyle(v.highlight,categoryColor(v.kind.key))
-            end
-            v.text.Text=v.kind.title
-            v.text.TextColor3=categoryColor(v.kind.key)
-            if v.kind.key=="generator" and state.generatorProgressESP then
-                local percent=tonumber(gameValue(object,"RepairProgress")
-                    or gameValue(object,"Progress"))
-                if percent then
-                    local cp=math.clamp(percent,0,100)
-                    v.text.Text=string.format("GENERATOR %.1f%%",cp)
-                    v.text.TextColor3=categoryColor(v.kind.key)
-                else
-                    v.text.Text="GENERATOR (progress unknown)"
-                end
-            end
-        else
-            v.gui:Destroy()
-            if v.highlight then v.highlight:Destroy() end
-            objectiveVisuals[object]=nil
-            state.identifiedObjectives=math.max(0,state.identifiedObjectives-1)
-        end
+
+local function makeObjectiveNodes(record)
+    if not record.gui then
+        local billboard=create("BillboardGui",playerGui,{
+            Name="VelionVDObjective",
+            Adornee=record.part,
+            Size=UDim2.fromOffset(158,29),
+            StudsOffsetWorldSpace=Vector3.new(0,3.0,0),
+            AlwaysOnTop=true,Enabled=false,
+            MaxDistance=state.espDistance
+        })
+        local tag=label(billboard,record.kind.name:upper(),
+            0,0,158,29,12,categoryColor(record.kind.key))
+        tag.TextXAlignment=Enum.TextXAlignment.Center
+        tag.TextStrokeTransparency=.25
+        record.gui=billboard
+        record.text=tag
+    end
+    if state.objectHighlight and not record.highlight then
+        record.highlight=create("Highlight",Workspace,{
+            Name="VelionVDObjectiveOutline",
+            Adornee=record.obj,
+            Enabled=false,
+            DepthMode=Enum.HighlightDepthMode.AlwaysOnTop,
+            FillTransparency=1,OutlineTransparency=0,
+            FillColor=categoryColor(record.kind.key),
+            OutlineColor=categoryColor(record.kind.key)
+        })
     end
 end
 
--- Scan once in small batches, then follow newly spawned objects.
-local scanGeneration=0
+local function numericValue(target: Instance?, name: string)
+    if not target then return nil end
+    local raw=gameValue(target,name)
+    if type(raw)=="number" then return raw end
+    return nil
+end
+local function generatorProgress(record)
+    local obj=record.obj
+    local part=record.part
+    local progress=numericValue(obj,"RepairProgress")
+        or numericValue(obj,"Progress")
+        or numericValue(part,"RepairProgress")
+        or numericValue(part,"Progress")
+    -- Some models store the value in a nested ValueBase: this fallback is
+    -- performed only for the small number of actively rendered generators.
+    if progress==nil and obj:IsA("Model") then
+        local child=obj:FindFirstChild("RepairProgress",true)
+            or obj:FindFirstChild("Progress",true)
+        if child and child:IsA("ValueBase") and type(child.Value)=="number" then
+            progress=child.Value
+        end
+    end
+    if type(progress)~="number" then return "GEN • progress unknown" end
+    local maximum=numericValue(obj,"MaxRepairProgress")
+        or numericValue(obj,"MaxProgress")
+        or numericValue(part,"MaxProgress")
+    if maximum and maximum>0 then
+        return string.format("GEN %.0f%%",math.clamp(progress/maximum*100,0,100))
+    end
+    if progress==0 or (progress>=1 and progress<=100) then
+        return string.format("GEN %.0f%%",math.clamp(progress,0,100))
+    end
+    -- A 0..1 value without its scale must not be mislabeled as a percent.
+    return string.format("GEN %.2f (raw)",progress)
+end
+
+local function refreshObjectiveVisibility()
+    local now=os.clock()
+    if now-lastObjectiveRefresh<.30 then return end
+    lastObjectiveRefresh=now
+    local camera=Workspace.CurrentCamera
+    local root=player.Character and
+        player.Character:FindFirstChild("HumanoidRootPart")
+    local candidates={}
+    local count=0
+    for obj,record in pairs(objectiveVisuals) do
+        if not currentMap or not obj.Parent or not record.part.Parent
+            or not obj:IsDescendantOf(currentMap) then
+            removeObjectiveRecord(obj)
+        else
+            count+=1
+            if record.gui then record.gui.Enabled=false end
+            if record.highlight then record.highlight.Enabled=false end
+            if state.objectiveESP and objectiveEnabled(record.kind.key)
+                and root and camera then
+                local dist=(root.Position-record.part.Position).Magnitude
+                if dist<=state.espDistance then
+                    local pos,onScreen=camera:WorldToViewportPoint(
+                        record.part.Position)
+                    if onScreen and pos.Z>0 then
+                        -- Prioritize close objectives while favoring vital
+                        -- generators/gates over common windows.
+                        table.insert(candidates,{
+                            record=record,dist=dist,pos=pos,
+                            score=dist-record.kind.priority
+                        })
+                    end
+                end
+            end
+        end
+    end
+    table.sort(candidates,function(a,b)
+        return a.score<b.score
+    end)
+
+    local occupied={}
+    local labels=0
+    local highlights=0
+    local maxLabels=state.maxWorldLabels
+    local maxHighlights=state.maxWorldHighlights
+    for _,entry in ipairs(candidates) do
+        local rec=entry.record
+        local cellX=math.floor(entry.pos.X/125)
+        local cellY=math.floor(entry.pos.Y/64)
+        local cell=cellX..":"..cellY
+        local showLabel=state.objectLabels and labels<maxLabels
+            and not occupied[cell]
+        local showHighlight=state.objectHighlight
+            and highlights<maxHighlights
+        if showLabel or showHighlight then
+            makeObjectiveNodes(rec)
+            local color=categoryColor(rec.kind.key)
+            if rec.text then
+                rec.text.TextColor3=color
+                if rec.kind.key=="generator" and state.generatorProgressESP then
+                    rec.text.Text=generatorProgress(rec)
+                else
+                    rec.text.Text=rec.kind.name:upper()
+                end
+            end
+            if rec.gui then
+                rec.gui.MaxDistance=state.espDistance
+                rec.gui.Enabled=showLabel
+            end
+            if rec.highlight then
+                highlightStyle(rec.highlight,color)
+                rec.highlight.Enabled=showHighlight
+            end
+            if showLabel then
+                occupied[cell]=true
+                labels+=1
+            end
+            if showHighlight then highlights+=1 end
+            rec.lastVisible=now
+        end
+    end
+    -- Cache objects, not thousands of dormant BillboardGui/Highlight instances.
+    -- Keep a small grace period to avoid UI creation/destruction every frame.
+    for _,rec in pairs(objectiveVisuals) do
+        if rec.gui and now-rec.lastVisible>5 then
+            destroyObjectiveNodes(rec)
+        end
+    end
+    state.visibleLabels=labels
+    state.visibleHighlights=highlights
+    state.scanCandidates=count
+end
+
 local function startObjectiveScan()
     scanGeneration+=1
     local generation=scanGeneration
+    clearObjectives()
+    local map=Workspace:FindFirstChild("Map")
+    currentMap=map
+    state.scanProgress="Scanning Workspace.Map..."
+    if not map then
+        state.scanProgress="Workspace.Map not found (lobby/transition)"
+        state.scanScanned=0
+        return
+    end
     task.spawn(function()
-        state.scanProgress="Enumerating map..."
-        local map=Workspace:FindFirstChild("Map")
-        if not map then
-            state.scanProgress="Workspace.Map not found"
-            return
-        end
-        local objects=Workspace:GetDescendants()
-        state.scanProgress="Analyzing: "..#objects.." objects"
+        local started=os.clock()
+        local objects=map:GetDescendants()
+        state.scanScanned=#objects
         for i,item in ipairs(objects) do
             if not state.alive or generation~=scanGeneration then return end
             considerObjective(item)
-            if i%90==0 then task.wait() end
+            if i%120==0 then task.wait() end
         end
-        state.scanProgress="Complete"
+        if not state.alive or generation~=scanGeneration then return end
+        state.scanDurationMs=math.floor((os.clock()-started)*1000)
+        state.scanProgress="Map scan complete"
+        lastObjectiveRefresh=0
     end)
 end
-connect(Workspace.DescendantAdded,considerObjective)
+
+-- Only observe changes in the active map, never the full lobby or previews.
+connect(Workspace.DescendantAdded,function(item)
+    if currentMap and item:IsDescendantOf(currentMap) then
+        considerObjective(item)
+    end
+end)
 connect(Workspace.ChildAdded,function(item)
-    if state.alive and item.Name=="Map" then
-        task.defer(startObjectiveScan)
+    if item.Name=="Map" then startObjectiveScan() end
+end)
+connect(Workspace.ChildRemoved,function(item)
+    if item==currentMap then
+        scanGeneration+=1
+        currentMap=nil
+        clearObjectives()
+        state.scanProgress="Map removed / loading next round"
     end
 end)
 connect(Workspace.DescendantRemoving,function(item)
-    local visual=objectiveVisuals[item]
-    if visual then
-        visual.gui:Destroy()
-        if visual.highlight then visual.highlight:Destroy() end
-        objectiveVisuals[item]=nil
-        state.identifiedObjectives=math.max(0,state.identifiedObjectives-1)
-    end
+    if objectiveVisuals[item] then removeObjectiveRecord(item) end
 end)
+
 
 local function setNoClip(active)
     state.noClip=active
@@ -1037,4 +1187,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 startObjectiveScan()
-print("[Velion District V4.0 Fluent] Loaded (runtime gameplay not verified).")
+print("[Velion District V4.1] Map-scoped World ESP V2 enabled. Live game not tested.")
