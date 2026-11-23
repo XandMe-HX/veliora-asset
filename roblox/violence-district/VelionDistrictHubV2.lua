@@ -157,7 +157,7 @@ local function windowSize(open: boolean): UDim2
     local camera=Workspace.CurrentCamera
     local vp=camera and camera.ViewportSize or Vector2.new(1280,720)
     local width=math.min(438,math.max(280,vp.X-26))
-    local height=math.min(555,math.max(310,vp.Y-52))
+    local height=math.min(555,math.max(250,vp.Y-52))
     return UDim2.fromOffset(width,open and height or 112)
 end
 local panel=create("Frame",gui,{
@@ -309,10 +309,17 @@ for i,name in ipairs(tabNames) do
     connect(tab.MouseButton1Click,function() switchTab(name) end)
 end
 local redraws: {() -> ()}={}
+local pageOrder=setmetatable({}, {__mode="k"})
+local function nextOrder(page: ScrollingFrame): number
+    local value=(pageOrder[page] or 0)+1
+    pageOrder[page]=value
+    return value
+end
 local function glassRow(page: ScrollingFrame,headerText: string,
     description: string): (TextButton,TextLabel)
     local row=button(page,"",0,0,100,54)
     row.Size=UDim2.new(1,-5,0,55)
+    row.LayoutOrder=nextOrder(page)
     row.BackgroundColor3=Color3.fromRGB(70,75,70)
     row.BackgroundTransparency=.40
     row.Text=""
@@ -359,6 +366,7 @@ local function makeStat(page: ScrollingFrame,name: string): TextLabel
         BackgroundTransparency=.52,BorderSizePixel=0
     })
     round(f,12)
+    f.LayoutOrder=nextOrder(page)
     local nameLabel=label(f,name,12,6,310,18,10,palette.muted)
     nameLabel.Size=UDim2.new(1,-24,0,18)
     local value=label(f,"Checking...",12,28,315,29,12,palette.white)
@@ -743,22 +751,32 @@ local function considerObjective(candidate)
     local obj,part=resolveObjective(candidate,kind)
     if not obj or not part or objectiveVisuals[obj] then return end
     if state.identifiedObjectives>=90 then return end
+    local outline=create("Highlight",Workspace.CurrentCamera or Workspace,{
+        Name="VelionVDObjectiveOutline",Adornee=obj,
+        Enabled=state.objectiveESP and objectiveEnabled(kind.key),
+        FillColor=kind.color,OutlineColor=kind.color,
+        FillTransparency=.86,OutlineTransparency=.15,
+        DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
+    })
     local billboard=create("BillboardGui",playerGui,{
         Name="VelionVDObjective",Adornee=part,
         Size=UDim2.fromOffset(168,26),AlwaysOnTop=true,
-        MaxDistance=600,Enabled=state.objectiveESP,
+        MaxDistance=state.espDistance,
+        Enabled=state.objectiveESP and objectiveEnabled(kind.key),
         StudsOffsetWorldSpace=Vector3.new(0,3.2,0)
     })
     local tag=label(billboard,kind.title,0,0,168,26,12,kind.color)
     tag.TextStrokeTransparency=.2
     tag.TextXAlignment=Enum.TextXAlignment.Center
-    objectiveVisuals[obj]={gui=billboard,kind=kind,part=part,text=tag}
+    objectiveVisuals[obj]={gui=billboard,highlight=outline,kind=kind,part=part,text=tag}
     state.identifiedObjectives+=1
 end
 local function refreshObjectiveVisibility()
     for object,v in pairs(objectiveVisuals) do
         if object.Parent and v.part.Parent then
-            v.gui.Enabled=state.objectiveESP and objectiveEnabled(v.kind.key)
+            local show=state.objectiveESP and objectiveEnabled(v.kind.key)
+            v.gui.Enabled=show
+            if v.highlight then v.highlight.Enabled=show end
             v.gui.MaxDistance=state.espDistance
             v.text.Text=v.kind.title
             v.text.TextColor3=v.kind.color
@@ -776,6 +794,7 @@ local function refreshObjectiveVisibility()
             end
         else
             v.gui:Destroy()
+            if v.highlight then v.highlight:Destroy() end
             objectiveVisuals[object]=nil
             state.identifiedObjectives=math.max(0,state.identifiedObjectives-1)
         end
@@ -814,6 +833,7 @@ connect(Workspace.DescendantRemoving,function(item)
     local visual=objectiveVisuals[item]
     if visual then
         visual.gui:Destroy()
+        if visual.highlight then visual.highlight:Destroy() end
         objectiveVisuals[item]=nil
         state.identifiedObjectives=math.max(0,state.identifiedObjectives-1)
     end
@@ -998,13 +1018,13 @@ makeToggle(visualPage,"FULLBRIGHT","Local lighting and ambient boost",
 makeToggle(visualPage,"NO FOG","Reduce fog and atmospheric haze",
     function() return state.noFog end,
     function(v) state.noFog=v;updateLighting() end)
-makeAction(visualPage,"CAMERA FOV","Cycle 70 / 85 / 100 degrees",
+local fovButton=makeAction(visualPage,"CAMERA FOV","Cycle 70 / 85 / 100 degrees",
     function()
         local cycle={[70]=85,[85]=100,[100]=70}
         state.fov=cycle[state.fov] or 70
         cameraFov()
     end)
-makeAction(visualPage,"ESP RANGE","Cycle 350 / 650 / 1000 / 2000 studs",
+local rangeButton=makeAction(visualPage,"ESP RANGE","Cycle 350 / 650 / 1000 / 2000 studs",
     function()
         local cycle={[350]=650,[650]=1000,[1000]=2000,[2000]=350}
         state.espDistance=cycle[state.espDistance] or 650
@@ -1018,7 +1038,6 @@ for _,name in ipairs({"Frosted","Clear","Blur"}) do
         "Use this glass theme for the dashboard",function()
             applyMode(modeName)
         end)
-    local leftLabel=action:FindFirstChildOfClass("TextLabel")
     local function displayActive()
         action.BackgroundColor3=glassMode==modeName
             and Color3.fromRGB(103,116,104) or Color3.fromRGB(66,70,66)
@@ -1030,7 +1049,7 @@ makeToggle(settingsPage,"SCENE BLUR (GLOBAL)","Off by default; affects all 3D sc
     function(v) state.sceneBlur=v;syncBlur() end)
 local scaleIndex=1
 local scaleChoices={1,.9,.8}
-makeAction(settingsPage,"HUD SCALE","Tap to cycle 100 / 90 / 80 percent",
+local scaleButton=makeAction(settingsPage,"HUD SCALE","Tap to cycle 100 / 90 / 80 percent",
     function()
         scaleIndex=scaleIndex%3+1
         hudScale.Scale=scaleChoices[scaleIndex]
@@ -1143,6 +1162,14 @@ connect(RunService.Heartbeat,function()
     movementStat.Text=hum and
         ("WalkSpeed: "..hum.WalkSpeed.."; Assist: "
             ..(state.speed and "ON" or "OFF")) or "No humanoid"
+    local sb=speedButton:FindFirstChildOfClass("TextLabel")
+    if sb then sb.Text="SPEED VALUE: "..state.speedValue end
+    local fb=fovButton:FindFirstChildOfClass("TextLabel")
+    if fb then fb.Text="CAMERA FOV: "..state.fov end
+    local rb=rangeButton:FindFirstChildOfClass("TextLabel")
+    if rb then rb.Text="ESP RANGE: "..state.espDistance end
+    local hb=scaleButton:FindFirstChildOfClass("TextLabel")
+    if hb then hb.Text="HUD SCALE: "..math.floor(hudScale.Scale*100).."%" end
     local miniWarning=inDanger and "KILLER NEARBY" or "CLEAR / UNKNOWN"
     miniSummary.Text="# "..#players.." PLAYERS   |   "..count
         .." OBJECTIVES   |   "..miniWarning
@@ -1240,7 +1267,9 @@ local function cleanup()
     table.clear(connections)
     for other in pairs(playerVisuals) do removePlayerVisual(other) end
     for obj,v in pairs(objectiveVisuals) do
-        v.gui:Destroy();objectiveVisuals[obj]=nil
+        v.gui:Destroy()
+        if v.highlight then v.highlight:Destroy() end
+        objectiveVisuals[obj]=nil
     end
     setNoClip(false)
     state.fullbright=false
