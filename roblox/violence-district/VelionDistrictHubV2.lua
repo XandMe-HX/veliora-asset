@@ -182,6 +182,7 @@ local panel=create("Frame",gui,{
 create("UISizeConstraint",panel,{
     MinSize=Vector2.new(296,320),MaxSize=Vector2.new(540,690)
 })
+local hudScale=create("UIScale",panel,{Scale=1})
 local cardArea=create("Frame",panel,{
     Name="GlassModeSelector",Size=UDim2.new(1,0,0,236),
     BackgroundTransparency=1
@@ -885,9 +886,9 @@ toggle(visual,"FULLBRIGHT",118,
 toggle(visual,"NO FOG",162,
     function() return state.noFog end,
     function(v) state.noFog=v;updateLighting() end)
-local fov=button(visual,"CAMERA FOV: 70",0,206,100,43)
+local fov=button(visual,"CAMERA FOV: 70",0,206,100,44)
 fov.Position=UDim2.new(.03,0,0,206)
-fov.Size=UDim2.new(.94,0,0,43)
+fov.Size=UDim2.new(.94,0,0,44)
 connect(fov.MouseButton1Click,function()
     local options={[70]=85,[85]=100,[100]=70}
     state.fov=options[state.fov] or 70
@@ -899,9 +900,9 @@ toggle(playerPage,"NOCLIP",30,
     function() return state.noClip end,setNoClip)
 toggle(playerPage,"SPEED ASSIST",74,
     function() return state.speed end,setSpeed)
-local speedButton=button(playerPage,"SPEED VALUE: 24",0,118,100,43)
+local speedButton=button(playerPage,"SPEED VALUE: 24",0,118,100,44)
 speedButton.Position=UDim2.new(.03,0,0,118)
-speedButton.Size=UDim2.new(.94,0,0,43)
+speedButton.Size=UDim2.new(.94,0,0,44)
 connect(speedButton.MouseButton1Click,function()
     local options={[24]=28,[28]=32,[32]=20,[20]=24}
     state.speedValue=options[state.speedValue] or 24
@@ -949,22 +950,31 @@ skillInfo.Size=UDim2.new(.94,0,0,65)
 toggle(settingsPage,"SCENE BLUR (FULL SCREEN)",30,
     function() return sceneBlurEnabled end,
     function(v) sceneBlurEnabled=v;fadeBlur() end)
-local reset=button(settingsPage,"RESET HUD POSITION",0,77,100,45)
-reset.Position=UDim2.new(.03,0,0,77)
-reset.Size=UDim2.new(.94,0,0,45)
+local scaleButton=button(settingsPage,"HUD SCALE: 100%",0,77,100,44)
+scaleButton.Position=UDim2.new(.03,0,0,77)
+scaleButton.Size=UDim2.new(.94,0,0,44)
+local scales={1,.9,.8}
+local scaleIndex=1
+connect(scaleButton.MouseButton1Click,function()
+    scaleIndex=scaleIndex%#scales+1
+    hudScale.Scale=scales[scaleIndex]
+    scaleButton.Text="HUD SCALE: "..math.floor(scales[scaleIndex]*100).."%"
+    task.defer(keepOnScreen)
+end)
+local reset=button(settingsPage,"RESET HUD POSITION",0,122,100,44)
+reset.Position=UDim2.new(.03,0,0,122)
+reset.Size=UDim2.new(.94,0,0,44)
 connect(reset.MouseButton1Click,function()
     panel.Position=UDim2.new(1,-16,0,16)
     task.defer(keepOnScreen)
 end)
-local collapse=button(settingsPage,"RETURN TO MINI HUD",0,125,100,45)
-collapse.Position=UDim2.new(.03,0,0,125)
-collapse.Size=UDim2.new(.94,0,0,45)
+local collapse=button(settingsPage,"RETURN TO MINI HUD",0,169,100,44)
+collapse.Position=UDim2.new(.03,0,0,169)
+collapse.Size=UDim2.new(.94,0,0,44)
 connect(collapse.MouseButton1Click,function() setExpanded(false) end)
 label(settingsPage,
-    "Tap the 3 glass cards to switch modes.\n"
-    .."GlassBlur affects the full scene, not one panel.\n"
-    .."Mode is stored in Player.GlassMode.",
-    13,179,310,56,11,palette.muted)
+    "Global blur, not per-panel  |  Player.GlassMode",
+    13,216,310,22,10,palette.muted)
 connect(quickESP.MouseButton1Click,function()
     state.playerESP=not state.playerESP
     if not state.playerESP then
@@ -981,10 +991,26 @@ redrawQuick()
 setMode(selectedMode)
 
 
-local alert=label(gui,"",0,0,460,40,16,palette.red)
-alert.Font=Enum.Font.GothamBold
-alert.TextXAlignment=Enum.TextXAlignment.Center
-alert.Position=UDim2.new(.5,-230,0,8)
+local alert=create("TextLabel",gui,{
+    Name="KillerWarning",AnchorPoint=Vector2.new(.5,0),
+    Position=UDim2.new(.5,0,0,10),
+    Size=UDim2.new(.65,0,0,44),
+    Text="",Visible=false,Font=Enum.Font.GothamMedium,TextSize=15,
+    TextScaled=false,TextColor3=palette.red,
+    BackgroundColor3=Color3.fromRGB(35,30,31),
+    BackgroundTransparency=.35,BorderSizePixel=0,
+    TextStrokeTransparency=.8
+})
+create("UISizeConstraint",alert,{
+    MinSize=Vector2.new(220,44),MaxSize=Vector2.new(460,44)
+})
+round(alert,20)
+create("UIStroke",alert,{
+    Color=Color3.fromRGB(229,199,186),Transparency=.62,Thickness=1
+})
+create("UIGradient",alert,{
+    Color=Modes.Blur.Gradient,Rotation=10
+})
 
 local function estimateNextKiller()
     local candidates=Players:GetPlayers()
@@ -1054,6 +1080,7 @@ connect(RunService.Heartbeat,function(dt)
         and string.format("KILLER NEARBY: %s (%d studs)",
             closestName,math.floor(closestKiller))
         or ""
+    alert.Visible=(alert.Text~="")
     local team=player.Team and player.Team.Name:lower() or ""
     local lobby=(team:find("lobby",1,true)
         or team:find("spectator",1,true))~=nil
