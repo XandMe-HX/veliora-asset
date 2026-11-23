@@ -48,6 +48,9 @@ local state = {
     progressScale="Auto", progressUnknown=0,
     worldItemsFound=0, scanMapCount=0, scanInteractableCount=0,
     abilityStatus="Waiting for replicated ability signals",
+    abilityLast="No verified activation",
+    abilitySignalsObserved=0, abilityNotificationCount=0,
+    lastRoleTransition="None detected",
     roleTransitions=0, trackedPlayers=0,
     maxWorldLabels=22, maxWorldHighlights=20, objectLabels=true,
     scanCandidates=0, scanScanned=0, scanDurationMs=0,
@@ -315,26 +318,106 @@ local function maskLabel(other)
 end
 local function roleOf(other)
     local character=other.Character
-    -- Convert missing attributes to empty strings: ipairs would otherwise
-    -- stop at the first nil and skip real Team/character attributes.
+    -- Prefer explicit replicated state over guesses from names or cosmetics.
+    if gameValue(other,"IsKiller")==true
+        or gameValue(character,"IsKiller")==true then
+        return "Killer",espColors.Killer
+    end
+    if gameValue(other,"IsSurvivor")==true
+        or gameValue(character,"IsSurvivor")==true then
+        return "Survivor",espColors.Survivor
+    end
     local fields={
-        tostring(other:GetAttribute("Role") or ""),
-        tostring(other:GetAttribute("role") or ""),
-        tostring(other:GetAttribute("Team") or ""),
-        tostring(other:GetAttribute("TeamRole") or ""),
-        tostring(character and character:GetAttribute("Role") or ""),
-        tostring(other.Team and other.Team.Name or "")
+        tostring(other.Team and other.Team.Name or ""),
+        tostring(gameValue(other,"Role") or ""),
+        tostring(gameValue(other,"role") or ""),
+        tostring(gameValue(other,"TeamRole") or ""),
+        tostring(gameValue(character,"Role") or ""),
+        tostring(gameValue(character,"TeamRole") or "")
     }
     for _,value in ipairs(fields) do
-        local s=tostring(value or ""):lower()
-        if s:find("killer",1,true) or s:find("hunter",1,true) then
+        local field=value:lower()
+        if field=="killer" or field=="killers"
+            or field=="hunter" or field=="hunters" then
             return "Killer",espColors.Killer
-        elseif s:find("surviv",1,true) or s:find("innocent",1,true) then
+        elseif field=="survivor" or field=="survivors"
+            or field=="innocent" or field=="innocents" then
             return "Survivor",espColors.Survivor
         end
     end
     return "Unknown",espColors.Unknown
 end
+
+local roleCache={}
+local abilityCache={}
+local abilityNotifyCooldown=7
+local function monitorPlayerRole(other,now)
+    local role=roleOf(other)
+    local previous=roleCache[other]
+    if previous and previous.role~=role then
+        state.roleTransitions+=1
+        state.lastRoleTransition=other.DisplayName..": "
+            ..previous.role.." → "..role
+    end
+    roleCache[other]={role=role,char=other.Character,updated=now}
+    return role
+end
+local function booleanAbilitySignal(other)
+    local char=other.Character
+    for _,key in ipairs({
+        "IsUsingAbility","UsingAbility","AbilityActive","AbilityInUse"
+    }) do
+        local raw=gameValue(char,key)
+        if raw==nil then raw=gameValue(other,key) end
+        if type(raw)=="boolean" then
+            return raw,key
+        end
+    end
+    local phase=gameValue(char,"AbilityState")
+        or gameValue(other,"AbilityState")
+    if type(phase)=="string" then
+        local lower=phase:lower()
+        local active=lower=="using" or lower=="active"
+            or lower=="casting" or lower=="triggered"
+        return active,"AbilityState: "..phase
+    end
+    return nil,nil
+end
+local function monitorKillerAbility(other,role,now)
+    if role~="Killer" or not other.Character then
+        abilityCache[other]=nil
+        return
+    end
+    local value,signalName=booleanAbilitySignal(other)
+    local prev=abilityCache[other]
+    if value==nil then
+        -- No replicated signal: do not invent ability activations.
+        if not prev then abilityCache[other]={value=nil,lastAt=-1e9} end
+        return
+    end
+    state.abilitySignalsObserved+=1
+    if prev and prev.value==false and value==true
+        and now-(prev.lastAt or -1e9)>=abilityNotifyCooldown then
+        state.abilityLast=other.DisplayName.." activated ability ("
+            ..tostring(signalName)..")"
+        state.abilityNotificationCount+=1
+        if state.abilityNotify then
+            pcall(function()
+                Fluent:Notify({
+                    Title="Killer Ability",
+                    Content=state.abilityLast,
+                    Duration=4
+                })
+            end)
+        end
+        prev.lastAt=now
+    end
+    abilityCache[other]={
+        value=value,signal=signalName,
+        lastAt=prev and prev.lastAt or -1e9
+    }
+end
+
 local function removePlayerVisual(other)
     local v=playerVisuals[other]
     if not v then return end
@@ -1222,11 +1305,16 @@ connect(RunService.Heartbeat,function()
     local closest=math.huge
     local killerName=""
     local list=Players:GetPlayers()
+    local knownRoles=0
+    state.abilitySignalsObserved=0
     for _,other in ipairs(list) do
         if other~=player then
-            if state.playerESP then ensurePlayerVisual(other) end
+            local role=monitorPlayerRole(other,now)
+            if role~="Unknown" then knownRoles+=1 end
+            monitorKillerAbility(other,role,now)
+            if state.playerESP then ensurePlayerVisual(other)
+            elseif playerVisuals[other] then removePlayerVisual(other) end
             if state.killerAlert and root then
-                local role=roleOf(other)
                 if role=="Killer" then
                     local target=other.Character and
                         other.Character:FindFirstChild("HumanoidRootPart")
@@ -1238,6 +1326,8 @@ connect(RunService.Heartbeat,function()
             end
         end
     end
+    state.trackedPlayers=#list-1
+    state.unknownRoles=math.max(0,state.trackedPlayers-knownRoles)
     refreshObjectiveVisibility()
     local danger=state.killerAlert and closest<99
     alert.Visible=danger
@@ -1324,7 +1414,11 @@ connect(RunService.Heartbeat,function()
     state.inputStatus=ok and "Touch sent (not confirmed by game)" or
         ("Input unavailable: "..tostring(err):sub(1,95))
 end)
-connect(Players.PlayerRemoving,removePlayerVisual)
+connect(Players.PlayerRemoving,function(leaving)
+    removePlayerVisual(leaving)
+    roleCache[leaving]=nil
+    abilityCache[leaving]=nil
+end)
 connect(Lighting.ChildAdded,function()
     if state.alive and (state.fullbright or state.noFog) then
         task.defer(updateLighting)
