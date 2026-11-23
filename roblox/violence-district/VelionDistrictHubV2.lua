@@ -35,7 +35,8 @@ local state = {
     speed=false, speedValue=24, fov=70,
     killerAlert=true, offscreenESP=true, hidden=false, scanProgress="Starting",
     expanded=true, activeTab="Home", sceneBlur=false,
-    killerESP=true, survivorESP=true, playerNames=true, playerDistance=true,
+    killerESP=true, survivorESP=true, unknownESP=false,
+    survivorItemsESP=false, playerNames=true, playerDistance=true,
     playerMask=true, chaseStatus=true, knockedStatus=true, hookedStatus=true,
     playerHighlight=true, objectHighlight=true, highlightMode="Outline", nextKiller=true, skillMonitor=true,
     autoSkillCheck=false, inputStatus="No action attempted",
@@ -343,6 +344,21 @@ local function ensurePlayerVisual(other)
     if not head then
         removePlayerVisual(other);return
     end
+    local role,color=roleOf(other)
+    if (role=="Killer" and not state.killerESP) or
+        (role=="Survivor" and not state.survivorESP) or
+        (role=="Unknown" and not state.unknownESP) then
+        removePlayerVisual(other)
+        return
+    end
+    local root=player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    local targetRoot=character:FindFirstChild("HumanoidRootPart")
+    local distance=(root and targetRoot)
+        and math.floor((root.Position-targetRoot.Position).Magnitude) or nil
+    if distance and distance>state.espDistance then
+        removePlayerVisual(other)
+        return
+    end
     local existing=playerVisuals[other]
     if existing and existing.character~=character then
         removePlayerVisual(other)
@@ -371,19 +387,12 @@ local function ensurePlayerVisual(other)
             billboard=billboard,text=textLabel,pointer=pointer}
         playerVisuals[other]=existing
     end
-    local role,color=roleOf(other)
-    if (role=="Killer" and not state.killerESP) or
-        (role=="Survivor" and not state.survivorESP) then
-        removePlayerVisual(other)
-        return
-    end
-    local root=player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-    local targetRoot=character:FindFirstChild("HumanoidRootPart")
-    local distance=(root and targetRoot)
-        and math.floor((root.Position-targetRoot.Position).Magnitude) or nil
     local isHooked=gameValue(character,"IsHooked")==true
+        or gameValue(other,"IsHooked")==true
     local isKnocked=gameValue(character,"Knocked")==true
+        or gameValue(other,"Knocked")==true
     local isChased=gameValue(character,"IsChased")==true
+        or gameValue(other,"IsChased")==true
     if isHooked and state.hookedStatus then color=espColors.Hooked
     elseif isKnocked and state.knockedStatus then color=espColors.Knocked
     elseif isChased and state.chaseStatus then color=espColors.Chased end
@@ -394,6 +403,11 @@ local function ensurePlayerVisual(other)
     local status=(isHooked and state.hookedStatus and "HOOKED")
         or (isKnocked and state.knockedStatus and "KNOCKED")
         or (isChased and state.chaseStatus and "CHASED") or nil
+    local heldItem=nil
+    if state.survivorItemsESP and role=="Survivor" then
+        local item=character:FindFirstChildWhichIsA("Tool")
+        if item then heldItem=item.Name end
+    end
     highlightStyle(existing.highlight,color)
     existing.highlight.Enabled=state.playerHighlight and
         (not distance or distance<=state.espDistance)
@@ -405,6 +419,7 @@ local function ensurePlayerVisual(other)
             ("\n"..distance.." studs") or "")
         ..(mask and ("\nMask: "..mask) or "")
         ..(status and ("\n"..status) or "")
+        ..(heldItem and ("\nHeld item: "..heldItem) or "")
     local cam=Workspace.CurrentCamera
     if not cam or not state.offscreenESP or
         (not (isChased and state.chaseStatus) and role~="Killer")
@@ -827,6 +842,11 @@ registerColor(Tabs.Players,"KillerColor","Killer Outline Color","Killer")
 registerToggle(Tabs.Players,"SurvivorESP","Survivor ESP",
     "Survivor character outline + labels","survivorESP")
 registerColor(Tabs.Players,"SurvivorColor","Survivor Outline Color","Survivor")
+registerToggle(Tabs.Players,"UnknownESP","Unknown Role Markers",
+    "Disabled by default; prevents lobby role false positives","unknownESP")
+registerToggle(Tabs.Players,"SurvivorItems","Survivor Held Item",
+    "Show replicated Tool equipped by survivor (not world item ESP)",
+    "survivorItemsESP")
 registerToggle(Tabs.Players,"PlayerOutline","Outlines Enabled",
     "Use through-wall Highlight for players","playerHighlight")
 registerToggle(Tabs.Players,"NameESP","Player Name Tags",
