@@ -1231,19 +1231,28 @@ local defMode=player:GetAttribute("GlassMode")
 local glassMode=(typeof(defMode)=="string" and
     (defMode=="Frosted" or defMode=="Clear" or defMode=="Blur"))
     and defMode or "Frosted"
+local glassModeStatus="Not applied"
 local function applyGlassMode(value:string)
     glassMode=value
     player:SetAttribute("GlassMode",glassMode)
-    if value=="Frosted" then
-        Fluent:ToggleAcrylic(true)
-        Fluent:ToggleTransparency(false)
-    elseif value=="Clear" then
-        Fluent:ToggleAcrylic(false)
-        Fluent:ToggleTransparency(true)
-    else -- Blur / One UI
-        Fluent:ToggleAcrylic(true)
-        Fluent:ToggleTransparency(true)
-    end
+    local ok,result=pcall(function()
+        if type(Fluent.ToggleAcrylic)~="function"
+            or type(Fluent.ToggleTransparency)~="function" then
+            error("Fluent theme toggles unavailable")
+        end
+        if value=="Frosted" then
+            Fluent:ToggleAcrylic(true)
+            Fluent:ToggleTransparency(false)
+        elseif value=="Clear" then
+            Fluent:ToggleAcrylic(false)
+            Fluent:ToggleTransparency(true)
+        else -- Blur / One UI (approximate theme, not real per-panel blur)
+            Fluent:ToggleAcrylic(true)
+            Fluent:ToggleTransparency(true)
+        end
+    end)
+    glassModeStatus=ok and ("Fluent theme requested: "..value)
+        or ("GlassMode saved; style unavailable: "..tostring(result):sub(1,100))
 end
 local modeDropdown=Tabs.Settings:AddDropdown("GlassMode",{
     Title="Glass Style",
@@ -1265,33 +1274,95 @@ Tabs.Settings:AddButton({
         if type(f)=="function" then f() end
     end
 })
--- Optional config support only when the executor exposes filesystem APIs.
-if type(isfolder)=="function" and type(makefolder)=="function" and
-    type(readfile)=="function" and type(writefile)=="function" then
-    local okModules,SaveManager,InterfaceManager=pcall(function()
+-- Fluent and SaveManager diagnostics (no automatic destructive filesystem tests).
+local configStatus="Filesystem APIs unavailable; saving disabled"
+local saveManager=nil
+local interfaceManager=nil
+local uiStatus=Tabs.Settings:AddParagraph({
+    Title="FLUENT UI HEALTH",
+    Content="Checks available after UI load; live click verification required."
+})
+local configStatusBox=Tabs.Settings:AddParagraph({
+    Title="SAVEMANAGER STATUS",
+    Content="Checking filesystem and addon API availability..."
+})
+local function runUISelfCheck(): string
+    local tabCount,toggleCount,controlCount=0,0,0
+    for _ in pairs(Tabs) do tabCount+=1 end
+    for _ in pairs(toggles) do toggleCount+=1 end
+    for _ in pairs(controls) do controlCount+=1 end
+    local issues={}
+    if type(Fluent.CreateWindow)~="function" then
+        issues[#issues+1]="Fluent.CreateWindow missing"
+    end
+    if type(Window.AddTab)~="function" then
+        issues[#issues+1]="Window.AddTab missing"
+    end
+    if type(Window.SelectTab)~="function" then
+        issues[#issues+1]="Window.SelectTab missing"
+    end
+    if type(statusMain.SetDesc)~="function" then
+        issues[#issues+1]="Paragraph.SetDesc missing"
+    end
+    if tabCount<8 then issues[#issues+1]="Fewer than 8 tabs" end
+    if toggleCount<25 then issues[#issues+1]="Too few registered toggles" end
+    local summary=(#issues==0) and "API checks passed"
+        or table.concat(issues,"; ")
+    return string.format(
+        "%s | %d tabs, %d toggles, %d option controls\n"
+        .."%s | Runtime actions and FPS not yet verified",
+        summary,tabCount,toggleCount,controlCount,glassModeStatus)
+end
+Tabs.Settings:AddButton({
+    Title="Run Fluent UI Self-Check",
+    Description="Verify registered tabs, toggles and methods (no gameplay actions)",
+    Callback=function()
+        uiStatus:SetDesc(runUISelfCheck())
+        configStatusBox:SetDesc(configStatus)
+    end
+})
+local hasFilesystem=type(isfolder)=="function"
+    and type(makefolder)=="function" and type(readfile)=="function"
+    and type(writefile)=="function"
+if hasFilesystem then
+    local okModules,first,second=pcall(function()
         local base="https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/"
         return loadstring(game:HttpGet(base.."SaveManager.lua"))(),
             loadstring(game:HttpGet(base.."InterfaceManager.lua"))()
     end)
-    if okModules and SaveManager and InterfaceManager then
-        pcall(function()
-            SaveManager:SetLibrary(Fluent)
-            InterfaceManager:SetLibrary(Fluent)
-            SaveManager:IgnoreThemeSettings()
-            InterfaceManager:SetFolder("VelionDistrict")
-            SaveManager:SetFolder("VelionDistrict/profiles")
-            InterfaceManager:BuildInterfaceSection(Tabs.Settings)
-            SaveManager:BuildConfigSection(Tabs.Settings)
-            SaveManager:LoadAutoloadConfig()
+    if okModules and first and second then
+        local okSetup,err=pcall(function()
+            first:SetLibrary(Fluent)
+            second:SetLibrary(Fluent)
+            first:IgnoreThemeSettings()
+            second:SetFolder("VelionDistrict")
+            first:SetFolder("VelionDistrict/profiles")
+            second:BuildInterfaceSection(Tabs.Settings)
+            first:BuildConfigSection(Tabs.Settings)
+            first:LoadAutoloadConfig()
         end)
+        if okSetup then
+            saveManager=first
+            interfaceManager=second
+            configStatus="Addons loaded, config UI built; autoload attempted. "
+                .."Disk roundtrip NOT verified."
+        else
+            configStatus="Addon setup error: "..tostring(err):sub(1,170)
+        end
+    else
+        configStatus="Addon download/load failed: "..tostring(first):sub(1,170)
     end
 end
-Window:SelectTab(1)
-Fluent:Notify({
-    Title="Velion District V4",
-    Content="Fluent UI loaded: ESP toggles, outlines and color pickers.",
-    Duration=5
-})
+configStatusBox:SetDesc(configStatus)
+uiStatus:SetDesc(runUISelfCheck())
+pcall(function() Window:SelectTab(1) end)
+pcall(function()
+    Fluent:Notify({
+        Title="Velion District V4.2",
+        Content="Fluent UI loaded. See Settings for diagnostic status.",
+        Duration=5
+    })
+end)
 
 local function estimateNextKiller()
     local candidates=Players:GetPlayers()
@@ -1523,4 +1594,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 startObjectiveScan()
-print("[Velion District V4.1] Map-scoped World ESP V2 enabled. Live game not tested.")
+print("[Velion District V4.2] Map+Interactables + item/role/ability observers loaded; gameplay not verified.")
