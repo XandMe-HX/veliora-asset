@@ -2,7 +2,7 @@
 --[[
     VELION DISTRICT HUB V4.1 - WORLD ESP V2
     For Roblox Violence District - client-side utility module.
-    Clean, readable Luau. No external UI libraries, telemetry or extra loaders.
+    Game UI uses upstream Fluent; the World ESP engine is local code.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
     UI uses dawid-scripts Fluent, with individual ESP toggles and color controls.
     Game internals can change. Auto input attempts are not confirmed success.
@@ -686,6 +686,9 @@ local function startObjectiveScan()
     local map=Workspace:FindFirstChild("Map")
     currentMap=map
     state.scanProgress="Scanning Workspace.Map..."
+    state.scanDurationMs=0
+    state.scanScanned=0
+    lastObjectiveRefresh=0
     if not map then
         state.scanProgress="Workspace.Map not found (lobby/transition)"
         state.scanScanned=0
@@ -878,8 +881,31 @@ Tabs.Objects:AddButton({
     Callback=function() startObjectiveScan() end
 })
 local objectStatus=Tabs.Objects:AddParagraph({
-    Title="OBJECT DETECTION",Content="Scanning Workspace..."
+    Title="WORLD ESP V2",Content="Waiting for active map..."
 })
+local perfStatus=Tabs.Objects:AddParagraph({
+    Title="WORLD ESP DIAGNOSTICS",
+    Content="Map status, cache, visible labels, highlights and FPS"
+})
+registerToggle(Tabs.Objects,"ObjectLabels","Objective Nametags",
+    "Display labels without crowding the screen","objectLabels",
+    function() lastObjectiveRefresh=0;refreshObjectiveVisibility() end)
+registerSlider(Tabs.Objects,"MaxLabels","Maximum Object Labels",
+    "Render nearest prioritized labels; 0 hides labels",
+    state.maxWorldLabels,0,40,0,
+    function(v)
+        state.maxWorldLabels=v
+        lastObjectiveRefresh=0
+        refreshObjectiveVisibility()
+    end)
+registerSlider(Tabs.Objects,"MaxHighlights","Maximum Object Highlights",
+    "Caps simultaneous highlights to protect FPS (max 26)",
+    state.maxWorldHighlights,0,26,0,
+    function(v)
+        state.maxWorldHighlights=v
+        lastObjectiveRefresh=0
+        refreshObjectiveVisibility()
+    end)
 registerSlider(Tabs.Objects,"ESPRange","ESP Distance",
     "Max object and player visibility range (studs)",
     state.espDistance,100,2000,0,
@@ -1040,11 +1066,20 @@ end
 
 
 -- Polling gameplay data at 4 Hz; UI paragraphs at 2 Hz.
+-- FPS sample uses the existing Heartbeat connection (no extra render loop).
 local lastTick=0
 local lastUI=-1e9
+local frameCounter=0
+local fpsFrom=os.clock()
 connect(RunService.Heartbeat,function()
     if not state.alive then return end
+    frameCounter+=1
     local now=os.clock()
+    if now-fpsFrom>=1 then
+        state.fps=math.floor(frameCounter/math.max(.001,now-fpsFrom)+.5)
+        fpsFrom=now
+        frameCounter=0
+    end
     if now-lastTick<.25 then return end
     lastTick=now
     updateNoClip()
@@ -1092,7 +1127,15 @@ connect(RunService.Heartbeat,function()
         or "Disabled")
     local skill=state.skillMonitor and checkSkillUi() or "Monitor disabled"
     statusSkill:SetDesc(skill)
-    objectStatus:SetDesc(state.scanProgress.." | "..state.identifiedObjectives.." found")
+    objectStatus:SetDesc(state.scanProgress..
+        " | "..state.identifiedObjectives.." cached objectives")
+    perfStatus:SetDesc(string.format(
+        "Map: %s | scanned: %d instances | scan: %d ms\n"
+        .."Candidates: %d | active labels: %d/%d | highlights: %d/%d | FPS: %d",
+        currentMap and currentMap:GetFullName() or "not loaded",
+        state.scanScanned,state.scanDurationMs,state.scanCandidates,
+        state.visibleLabels,state.maxWorldLabels,
+        state.visibleHighlights,state.maxWorldHighlights,state.fps))
     skillStatus:SetDesc(skill)
     inputStatus:SetDesc(state.inputStatus)
 end)
