@@ -210,6 +210,7 @@ local Tabs={
     Players=Window:AddTab({Title="Player ESP",Icon="users"}),
     Objects=Window:AddTab({Title="Object ESP",Icon="scan"}),
     Survivor=Window:AddTab({Title="Survivor",Icon="shield"}),
+    Killer=Window:AddTab({Title="Killer",Icon="skull"}),
     Movement=Window:AddTab({Title="Movement",Icon="footprints"}),
     Visual=Window:AddTab({Title="Visual",Icon="eye"}),
     Settings=Window:AddTab({Title="Settings",Icon="settings"})
@@ -504,6 +505,8 @@ local function ensurePlayerVisual(other)
         (not distance or distance<=state.espDistance)
     existing.billboard.MaxDistance=state.espDistance
     existing.billboard.Enabled=state.playerNames or status~=nil
+        or heldItem~=nil or (state.playerMask and mask~=nil)
+        or (state.playerDistance and distance~=nil)
     existing.text.TextColor3=color
     existing.text.Text=(state.playerNames and (nick.." ["..role.."]") or "")
         ..(state.playerDistance and distance and
@@ -678,6 +681,9 @@ local function removeObjectiveRecord(obj: Instance)
     destroyObjectiveNodes(rec)
     objectiveVisuals[obj]=nil
     state.identifiedObjectives=math.max(0,state.identifiedObjectives-1)
+    if rec.kind.key=="item" then
+        state.worldItemsFound=math.max(0,state.worldItemsFound-1)
+    end
 end
 local function clearObjectives()
     for obj in pairs(objectiveVisuals) do removeObjectiveRecord(obj) end
@@ -769,7 +775,7 @@ local function generatorProgress(rec): string
         return "GEN • progress unavailable"
     end
     local value: number?=nil
-    if maxValue and maxValue>0 then
+    if maxValue and maxValue>0 and state.progressScale~="Raw" then
         value=progress/maxValue*100
     elseif state.progressScale=="Fraction" then
         value=progress*100
@@ -1040,8 +1046,8 @@ registerToggle(Tabs.Players,"SurvivorESP","Survivor ESP",
 registerColor(Tabs.Players,"SurvivorColor","Survivor Outline Color","Survivor")
 registerToggle(Tabs.Players,"UnknownESP","Unknown Role Markers",
     "Disabled by default; prevents lobby role false positives","unknownESP")
-registerToggle(Tabs.Players,"SurvivorItems","Survivor Held Item",
-    "Show replicated Tool equipped by survivor (not world item ESP)",
+registerToggle(Tabs.Players,"SurvivorItems","Survivor Equipped Items",
+    "Show Tool names equipped by visible Survivor characters",
     "survivorItemsESP")
 registerToggle(Tabs.Players,"PlayerOutline","Outlines Enabled",
     "Use through-wall Highlight for players","playerHighlight")
@@ -1092,6 +1098,15 @@ registerToggle(Tabs.Objects,"GateESP","Gate ESP",
     "Exit gates","gateESP",
     function() refreshObjectiveVisibility() end)
 registerColor(Tabs.Objects,"GateColor","Gate Outline Color","Gate")
+registerToggle(Tabs.Objects,"WorldItems","World Pickup Items",
+    "Show Tool and recognized pickup objects within Map/Interactables",
+    "worldItemsESP",
+    function() lastObjectiveRefresh=0;refreshObjectiveVisibility() end)
+registerColor(Tabs.Objects,"ItemColor","World Item Outline Color","Item")
+local itemInfo=Tabs.Objects:AddParagraph({
+    Title="SURVIVOR ITEMS ESP",
+    Content="Replicated world Tools and pickup prompts only. Unreplicated inventories are unavailable."
+})
 Tabs.Objects:AddButton({
     Title="Rescan Map",Description="Refresh Workspace map references",
     Callback=function() startObjectiveScan() end
@@ -1103,6 +1118,22 @@ local perfStatus=Tabs.Objects:AddParagraph({
     Title="WORLD ESP DIAGNOSTICS",
     Content="Map status, cache, visible labels, highlights and FPS"
 })
+local progressStatus=Tabs.Objects:AddParagraph({
+    Title="GENERATOR PROGRESS",
+    Content="Auto detects percentage where possible; ambiguous values show raw."
+})
+local progressDropdown=Tabs.Objects:AddDropdown("GeneratorProgressScale",{
+    Title="Generator Progress Units",
+    Description="Auto / percent 0-100 / fraction 0-1 / raw value",
+    Values={"Auto","Percent","Fraction","Raw"},Default="Auto",
+    Callback=function(v)
+        if v=="Auto" or v=="Percent" or v=="Fraction" or v=="Raw" then
+            state.progressScale=v
+            lastObjectiveRefresh=0
+        end
+    end
+})
+controls.GeneratorProgressScale=progressDropdown
 registerToggle(Tabs.Objects,"ObjectLabels","Objective Nametags",
     "Display labels without crowding the screen","objectLabels",
     function() lastObjectiveRefresh=0;refreshObjectiveVisibility() end)
@@ -1137,6 +1168,23 @@ local hMode=Tabs.Objects:AddDropdown("HighlightMode",{
     end
 })
 controls.HighlightMode=hMode
+
+-- Killer ability notifications are observational, not synthetic remote calls.
+registerToggle(Tabs.Killer,"KillerAbilityNotify","Killer Ability Notifications",
+    "Alerts on replicated false-to-true ability status changes only",
+    "abilityNotify")
+local abilityStatus=Tabs.Killer:AddParagraph({
+    Title="ABILITY SIGNAL MONITOR",
+    Content="Waiting for replicated ability state; no remote hooks are assumed."
+})
+local roleStatus=Tabs.Killer:AddParagraph({
+    Title="KILLER / SURVIVOR ROLE TRACKING",
+    Content="Updates roles from Team and explicit replicated flags."
+})
+Tabs.Killer:AddParagraph({
+    Title="LIMITATIONS",
+    Content="No server ability packets are captured. Unknown states produce no speculative alerts."
+})
 
 -- Survivor mechanics only where source references are available.
 registerToggle(Tabs.Survivor,"MonitorSkill","Skill Check Monitor",
@@ -1352,11 +1400,28 @@ connect(RunService.Heartbeat,function()
     statusSkill:SetDesc(skill)
     objectStatus:SetDesc(state.scanProgress..
         " | "..state.identifiedObjectives.." cached objectives")
+    itemInfo:SetDesc("World item markers: "..state.worldItemsFound..
+        " | Character equipped Tool names: "..
+        (state.survivorItemsESP and "ON" or "OFF")..
+        " | No access to unreplicated inventories")
+    progressStatus:SetDesc("Units: "..state.progressScale..
+        " | Unknown/ambiguous visible generators: "..state.progressUnknown..
+        " | Percentages are shown only with recognized numeric scales")
+    abilityStatus:SetDesc(state.abilityLast..
+        " | Observed ability signals: "..state.abilitySignalsObserved..
+        " | Notifications: "..state.abilityNotificationCount)
+    roleStatus:SetDesc("Tracked: "..state.trackedPlayers..
+        " | Unknown: "..state.unknownRoles..
+        " | Role changes: "..state.roleTransitions..
+        " | Latest: "..state.lastRoleTransition)
     perfStatus:SetDesc(string.format(
-        "Map: %s | scanned: %d instances | scan: %d ms\n"
-        .."Candidates: %d | active labels: %d/%d | highlights: %d/%d | FPS: %d",
-        currentMap and currentMap:GetFullName() or "not loaded",
-        state.scanScanned,state.scanDurationMs,state.scanCandidates,
+        "Map: %s | Interactables: %s | scan: %d ms\n"
+        .."Scanned Map: %d / Interactables: %d | cache: %d\n"
+        .."Labels: %d/%d | highlights: %d/%d | FPS: %d",
+        currentMap and currentMap.Name or "not loaded",
+        activeInteractables and activeInteractables.Name or "not loaded",
+        state.scanDurationMs,state.scanMapCount,
+        state.scanInteractableCount,state.scanCandidates,
         state.visibleLabels,state.maxWorldLabels,
         state.visibleHighlights,state.maxWorldHighlights,state.fps))
     skillStatus:SetDesc(skill)
