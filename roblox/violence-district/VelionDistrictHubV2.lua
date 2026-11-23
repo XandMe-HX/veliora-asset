@@ -37,7 +37,7 @@ local state = {
     expanded=true, activeTab="Home", sceneBlur=false,
     killerESP=true, survivorESP=true, playerNames=true, playerDistance=true,
     playerMask=true, chaseStatus=true, knockedStatus=true, hookedStatus=true,
-    playerHighlight=true, highlightMode="Outline", nextKiller=true, skillMonitor=true,
+    playerHighlight=true, objectHighlight=true, highlightMode="Outline", nextKiller=true, skillMonitor=true,
     autoSkillCheck=false, inputStatus="No action attempted",
     generatorESP=true, palletESP=true, windowESP=true, hookESP=true,
     gateESP=true, generatorProgressESP=true, espDistance=650,
@@ -146,7 +146,7 @@ local alert=create("TextLabel",gui,{
     Name="KillerWarning",Text="",Visible=false,
     AnchorPoint=Vector2.new(.5,0),
     Position=UDim2.new(.5,0,0,12),
-    Size=UDim2.fromOffset(410,43),
+    Size=UDim2.new(.92,0,0,43),
     TextColor3=espColors.Killer,TextSize=14,
     Font=Enum.Font.GothamBold,
     BackgroundColor3=Color3.fromRGB(26,28,33),
@@ -154,6 +154,9 @@ local alert=create("TextLabel",gui,{
     TextStrokeTransparency=.6
 })
 round(alert,12)
+create("UISizeConstraint",alert,{
+    MinSize=Vector2.new(220,43),MaxSize=Vector2.new(410,43)
+})
 create("UIStroke",alert,{
     Color=espColors.Killer,Thickness=1,Transparency=.35
 })
@@ -211,14 +214,6 @@ local function registerToggle(tab:any,id:string,title:string,description:string,
     })
     toggles[id]=obj
     return obj
-end
-local function setState(key:string,value:boolean)
-    state[key]=value
-    for _,control in pairs(toggles) do
-        if control._stateKey==key then
-            pcall(function() control:SetValue(value) end)
-        end
-    end
 end
 local function registerColor(tab:any,id:string,label:string,colorKey:string)
     local colorPicker=tab:AddColorpicker(id,{
@@ -360,7 +355,7 @@ local function ensurePlayerVisual(other)
             Name="VelionVDPlayerTag",Adornee=head,
             AlwaysOnTop=true,Size=UDim2.fromOffset(205,62),
             StudsOffsetWorldSpace=Vector3.new(0,2.5,0),
-            MaxDistance=650,ResetOnSpawn=false
+            MaxDistance=650
         })
         local textLabel=label(billboard,"",0,0,205,62,11)
         textLabel.TextXAlignment=Enum.TextXAlignment.Center
@@ -521,7 +516,7 @@ local function refreshObjectiveVisibility()
             local within=(not ownRoot or
                 (ownRoot.Position-v.part.Position).Magnitude<=state.espDistance)
             if v.highlight then
-                v.highlight.Enabled=show and within and state.playerHighlight
+                v.highlight.Enabled=show and within and state.objectHighlight
                 highlightStyle(v.highlight,categoryColor(v.kind.key))
             end
             v.text.Text=v.kind.title
@@ -702,6 +697,9 @@ registerToggle(Tabs.Players,"KillerWarn","Killer Proximity Alert",
     "Notify when known killer is less than 99 studs","killerAlert")
 
 -- Object ESP: separate toggle and color selector per kind.
+registerToggle(Tabs.Objects,"ObjectOutline","Object Outlines",
+    "Enable object Highlight outlines / fill","objectHighlight",
+    function() refreshObjectiveVisibility() end)
 registerToggle(Tabs.Objects,"GeneratorESP","Generator ESP",
     "Generator highlight + location","generatorESP",
     function() refreshObjectiveVisibility() end)
