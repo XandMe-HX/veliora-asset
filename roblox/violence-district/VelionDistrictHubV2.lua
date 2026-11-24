@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V4.6 - XANDME MONOCHROME
+    VELION DISTRICT HUB V4.7 - SESSION SAFETY
     For Roblox Violence District - client-side utility module.
     Game UI uses upstream Fluent; the World ESP engine is local code.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -198,7 +198,7 @@ local uiHeight=math.min(490,math.max(320,cameraSize.Y-80))
 local createdWindow,Window=pcall(function()
     return Fluent:CreateWindow({
         Title="XandMe.",
-        SubTitle="Velion District / Monochrome",
+        SubTitle="Velion District / V4.7",
         TabWidth=cameraSize.X<500 and 116 or 150,
         Size=UDim2.fromOffset(uiWidth,uiHeight),
         Acrylic=false,Theme="Darker",
@@ -226,6 +226,7 @@ local controls={}
 local toggles={}
 local toggleTitles={}
 local toggleOrder={}
+local toggleStateKeys={}
 local function registerToggle(tab:any,id:string,title:string,description:string,
     stateKey:string,onValue:((boolean)->())?)
     local obj=tab:AddToggle(id,{
@@ -238,6 +239,7 @@ local function registerToggle(tab:any,id:string,title:string,description:string,
     })
     toggles[id]=obj
     toggleTitles[id]=title
+    toggleStateKeys[id]=stateKey
     toggleOrder[#toggleOrder+1]=id
     return obj
 end
@@ -1649,6 +1651,9 @@ local openTween=nil
 local captureId=nil
 local bindings={}
 local keyRows={}
+local safetyActionId="EmergencyDisable"
+local safetyBusy=false
+local emergencyDisable
 local HttpService=game:GetService("HttpService")
 local keyPath="VelionDistrict/xandme-keybinds.json"
 local canSave=type(isfolder)=="function" and type(makefolder)=="function" and type(writefile)=="function" and type(readfile)=="function" and type(isfile)=="function"
@@ -1675,7 +1680,9 @@ if canSave then
         local data=HttpService:JSONDecode(readfile(keyPath))
         if type(data)~="table" then return end
         local used={}
-        for _,id in ipairs(toggleOrder) do
+        local ids=table.clone(toggleOrder)
+        ids[#ids+1]=safetyActionId
+        for _,id in ipairs(ids) do
             local name=data[id]
             if keyAllowed(name) and not used[name] then bindings[id]=name;used[name]=true end
         end
@@ -1694,6 +1701,12 @@ for _,id in ipairs(toggleOrder) do
         end
     })
 end
+toggleTitles[safetyActionId]="Emergency Disable"
+keyRows[safetyActionId]=keySection:AddButton({
+    Title="Emergency Disable",
+    Description=bindings[safetyActionId] or "Unbound",
+    Callback=function() captureId=safetyActionId;refreshKeyRows() end
+})
 keySection:AddButton({Title="Clear all shortcuts",Description="Keeps Right Ctrl reserved.",Callback=function()
     table.clear(bindings);captureId=nil;saveBindings();refreshKeyRows()
 end})
@@ -1719,6 +1732,8 @@ connect(UserInputService.InputBegan,function(input,processed)
         return -- assigning a key does not activate its feature
     end
     if processed or UserInputService:GetFocusedTextBox() or name=="RightControl" then return end
+    if bindings[safetyActionId]==name and emergencyDisable then emergencyDisable();return end
+    if safetyBusy then return end
     for id,key in pairs(bindings) do
         if key==name and toggles[id] then toggles[id]:SetValue(not toggles[id].Value);break end
     end
@@ -1736,9 +1751,75 @@ end)
 connect(player.CharacterAdded,function() task.defer(function() if state.alive then syncCursor() end end) end)
 local function stopCursor()
     manualCursor=false
+    state.manualCursor=false
     if openTween then openTween:Cancel() end
     syncCursor()
 end
+local safetySection=Tabs.Settings:AddSection("Session Safety")
+local safetyStatus=safetySection:AddParagraph({Title="Session status",Content="Manual recovery controls only. No moderator detection."})
+local function restoreNativeControls(closeMenu)
+    local failures={}
+    local function attempt(name,fn)
+        local ok,err=pcall(fn)
+        if not ok then failures[#failures+1]=name..": "..tostring(err):sub(1,100) end
+    end
+    for _,id in ipairs({"CustomFov","SmoothCamera","SmoothZoom","MoonwalkAD","ReleaseCursor"}) do
+        local toggle=toggles[id]
+        if toggle then
+            state[toggleStateKeys[id]]=false
+            attempt(id,function() toggle:SetValue(false) end)
+        end
+    end
+    attempt("camera",cameraController.shutdown)
+    attempt("moonwalk",function() setMoonwalk(false) end)
+    attempt("collision",function() setNoClip(false) end)
+    attempt("speed",function() setSpeed(false) end)
+    manualCursor=false
+    state.manualCursor=false
+    if closeMenu then attempt("menu",function() if Window.Root.Visible then Window:Minimize() end end) end
+    attempt("cursor",stopCursor)
+    return failures
+end
+emergencyDisable=function()
+    if not state.alive or safetyBusy then return end
+    safetyBusy=true
+    captureId=nil
+    local failures={}
+    local function attempt(name,fn)
+        local ok,err=pcall(fn)
+        if not ok then failures[#failures+1]=name..": "..tostring(err):sub(1,100) end
+    end
+    -- Reset registered feature state before callbacks; cleanup is independent of UI success.
+    for _,id in ipairs(toggleOrder) do
+        if toggleStateKeys[id] then state[toggleStateKeys[id]]=false end
+    end
+    state.roleTracking=false
+    state.sceneBlur=false
+    for _,id in ipairs(toggleOrder) do
+        attempt(id,function() toggles[id]:SetValue(false) end)
+    end
+    scanGeneration+=1
+    attempt("watchers",stopSourceWatchers)
+    attempt("object visuals",clearObjectives)
+    state.scanProgress="Disabled"
+    attempt("player visuals",function()
+        for other in pairs(playerVisuals) do removePlayerVisual(other) end
+    end)
+    alert.Visible=false
+    state.inputStatus="Disabled manually"
+    attempt("lighting",updateLighting)
+    for _,err in ipairs(restoreNativeControls(true)) do failures[#failures+1]=err end
+    local message=#failures==0 and "Feature reset requested; native controls restored where supported." or ("Recovery errors: "..table.concat(failures," | "))
+    attempt("keybind display",refreshKeyRows)
+    attempt("status",function() safetyStatus:SetDesc(message) end)
+    safetyBusy=false
+    if #failures>0 then warn("[XandMe Safety] "..table.concat(failures," | ")) end
+end
+safetySection:AddButton({Title="Emergency Disable",Description="Manually turn features off and return to native controls. Your key assignments are kept.",Callback=emergencyDisable})
+safetySection:AddButton({Title="Restore Native Controls",Description="Disable camera and movement overrides and close the menu.",Callback=function()
+    local failures=restoreNativeControls(true)
+    safetyStatus:SetDesc(#failures==0 and "Native control restoration requested." or table.concat(failures," | "))
+end})
 -- Use the real logo when the owner supplies a published Roblox image asset ID.
 -- A typographic fallback is intentional; no fabricated asset ID.
 local function playIntro()
@@ -2106,4 +2187,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V4.6] Monochrome base, unbound shortcuts and native cursor; runtime not tested.")
+print("[XandMe V4.7] Manual session safety and recovery; runtime not tested.")
