@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V5.1 - NATIVE UI POLISH
+    VELION DISTRICT HUB V5.2 - NATIVE CONTROL FIXES
     For Roblox Violence District - client-side utility module.
     Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -216,6 +216,12 @@ create("UIStroke",alert,{
 local Native,Window=(function()
     local ui={Options={}}
     local animationDuration=.14
+    local activeUITweens={}
+    local rowOrder={}
+    local function nextRowOrder(container)
+        rowOrder[container]=(rowOrder[container] or 0)+1
+        return rowOrder[container]
+    end
     local C={
         black=Color3.fromRGB(7,7,7),sidebar=Color3.fromRGB(12,12,12),
         row=Color3.fromRGB(21,21,21),button=Color3.fromRGB(32,32,32),
@@ -262,7 +268,11 @@ local Native,Window=(function()
     local function safe(name,fn,...)
         if not fn then return end
         local ok,err=pcall(fn,...)
-        if not ok then runtimeLog.record("native UI / "..name,err) end
+        if not ok then
+            runtimeLog.record("native UI / "..name,err)
+            warn("[XandMe UI] "..name..": "..tostring(err))
+        end
+        return ok
     end
     local function bindClick(b,name,fn)
         connect(b.Activated,function()
@@ -280,7 +290,7 @@ local Native,Window=(function()
     local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0,Active=true})
     local brand=text(header,"XandMe.",26,true)
     brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-120,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
-    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.1",10,false,C.muted)
+    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.2",10,false,C.muted)
     subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-120,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
     local close=btn(header,"−",34,30)
     close.AnchorPoint=Vector2.new(1,.5);close.Position=UDim2.new(1,-12,.5,0)
@@ -360,12 +370,15 @@ local Native,Window=(function()
     end
     local function newRow(container,title,desc,rightWidth)
         local frame=create("Frame",container,{
-            BackgroundColor3=C.row,BackgroundTransparency=0,BorderSizePixel=0,
+            LayoutOrder=nextRowOrder(container),BackgroundColor3=C.row,BackgroundTransparency=0,BorderSizePixel=0,
             Size=UDim2.new(1,0,0,0),AutomaticSize=Enum.AutomaticSize.Y
         })
         round(frame,8);stroke(frame);pad(frame,10)
         create("UISizeConstraint",frame,{MinSize=Vector2.new(0,54)})
-        local left=create("Frame",frame,{
+        list(frame,8)
+        local top=create("Frame",frame,{LayoutOrder=1,Size=UDim2.new(1,0,0,0),AutomaticSize=Enum.AutomaticSize.Y,BackgroundTransparency=1})
+        create("UISizeConstraint",top,{MinSize=Vector2.new(0,34)})
+        local left=create("Frame",top,{
             BackgroundTransparency=1,Size=UDim2.new(1,-rightWidth,0,0),
             AutomaticSize=Enum.AutomaticSize.Y
         })
@@ -383,7 +396,7 @@ local Native,Window=(function()
         end
         function result:SetTitle(value) heading.Text=tostring(value) end
         if rightWidth>0 then
-            local actions=create("Frame",frame,{
+            local actions=create("Frame",top,{
                 AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,0,.5,0),
                 Size=UDim2.fromOffset(rightWidth-6,34),BackgroundTransparency=1
             })
@@ -405,6 +418,7 @@ local Native,Window=(function()
     end
     function Methods:AddSection(title)
         local heading=text(self.Container,title,15,true)
+        heading.LayoutOrder=nextRowOrder(self.Container)
         heading.Size=UDim2.new(1,0,0,26);heading.AutomaticSize=Enum.AutomaticSize.None
         return setmetatable({Container=self.Container},{__index=Methods})
     end
@@ -420,10 +434,10 @@ local Native,Window=(function()
         local function paint(animate)
             toggle.Text=obj.Value and "ON" or "OFF"
             local goal={BackgroundColor3=obj.Value and C.white or C.button,TextColor3=obj.Value and C.black or C.muted}
-            if toggleTween then toggleTween:Cancel();toggleTween=nil end
+            if toggleTween then activeUITweens[toggleTween]=nil;toggleTween:Cancel();toggleTween=nil end
             if animate then
                 toggleTween=TweenService:Create(toggle,TweenInfo.new(animationDuration,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),goal)
-                toggleTween:Play()
+                activeUITweens[toggleTween]=true;toggleTween:Play()
             else
                 toggle.BackgroundColor3=goal.BackgroundColor3;toggle.TextColor3=goal.TextColor3
             end
@@ -440,8 +454,8 @@ local Native,Window=(function()
         local valueText=text(row.Actions,"",12,true)
         valueText.AutomaticSize=Enum.AutomaticSize.None;valueText.Size=UDim2.fromOffset(54,26)
         valueText.TextXAlignment=Enum.TextXAlignment.Right
-        local railFrame=create("Frame",self.Container,{
-            BackgroundColor3=C.row,BackgroundTransparency=0,BorderSizePixel=0,
+        local railFrame=create("Frame",row.Frame,{
+            LayoutOrder=2,BackgroundColor3=C.row,BackgroundTransparency=0,BorderSizePixel=0,
             Size=UDim2.new(1,0,0,31)
         })
         round(railFrame,6)
@@ -485,9 +499,9 @@ local Native,Window=(function()
     function Methods:AddDropdown(id,cfg)
         local row=newRow(self.Container,cfg.Title,cfg.Description,116)
         local b=btn(row.Actions,"",104,30)
-        local panel=create("Frame",self.Container,{
-            Size=UDim2.new(1,0,0,0),AutomaticSize=Enum.AutomaticSize.Y,
-            BackgroundColor3=C.row,BorderSizePixel=0,Visible=false
+        local panel=create("Frame",row.Frame,{
+            LayoutOrder=2,Size=UDim2.new(1,0,0,0),AutomaticSize=Enum.AutomaticSize.Y,
+            BackgroundColor3=C.button,BorderSizePixel=0,Visible=false
         })
         round(panel,7);pad(panel,8);list(panel,4)
         local obj={Type="Dropdown",Value=type(cfg.Default)=="number" and cfg.Values[cfg.Default] or cfg.Default}
@@ -508,10 +522,10 @@ local Native,Window=(function()
     function Methods:AddColorpicker(id,cfg)
         local parentRow=self.lastToggle
         local row=parentRow and parentRow.Actions and parentRow or newRow(self.Container,cfg.Title,cfg.Description,54)
-        local swatch=btn(row.Actions,"",22,24);swatch.LayoutOrder=2
-        local panel=create("Frame",self.Container,{
-            Size=UDim2.new(1,0,0,0),AutomaticSize=Enum.AutomaticSize.Y,
-            BackgroundColor3=C.row,BorderSizePixel=0,Visible=false
+        local swatch=btn(row.Actions,"",22,24);swatch.LayoutOrder=2;swatch.AutoButtonColor=false
+        local panel=create("Frame",row.Frame,{
+            LayoutOrder=2,Size=UDim2.new(1,0,0,0),AutomaticSize=Enum.AutomaticSize.Y,
+            BackgroundColor3=C.button,BorderSizePixel=0,Visible=false
         })
         round(panel,7);pad(panel,9);list(panel,6)
         text(panel,cfg.Title.." / color",12,true)
@@ -523,25 +537,31 @@ local Native,Window=(function()
             PlaceholderText="#RRGGBB",Text="",BorderSizePixel=0
         })
         round(hex,5)
+        local feedback=text(panel,"Enter six hexadecimal digits, e.g. #FFFFFF.",11,false,C.muted)
+        local reset=btn(panel,"Reset color",92,28);reset.Size=UDim2.new(1,0,0,28)
         local obj={Type="Colorpicker",Value=cfg.Default}
         local function hexString(c)
             return string.format("#%02X%02X%02X",math.floor(c.R*255+.5),math.floor(c.G*255+.5),math.floor(c.B*255+.5))
         end
         function obj:SetValue(v)
             if typeof(v)=="string" then
-                local raw=v:gsub("^#","")
-                if not raw:match("^%x%x%x%x%x%x$") then hex.Text=hexString(self.Value);return end
+                local raw=v:match("^%s*(.-)%s*$"):gsub("^#","")
+                if not raw:match("^%x%x%x%x%x%x$") then
+                    hex.Text=hexString(self.Value);feedback.Text="Invalid HEX. Previous color retained.";return
+                end
                 v=Color3.fromRGB(tonumber(raw:sub(1,2),16),tonumber(raw:sub(3,4),16),tonumber(raw:sub(5,6),16))
             end
             if typeof(v)~="Color3" then return end
             self.Value=v;swatch.BackgroundColor3=v;hex.Text=hexString(v)
-            safe(id,cfg.Callback,v)
+            local ok=safe(id,cfg.Callback,v)
+            feedback.Text=ok==false and "Color callback error. See Diagnostics." or "Selected: "..hexString(v)
         end
         for _,v in ipairs({cfg.Default,Color3.fromRGB(255,80,91),Color3.fromRGB(78,173,252),Color3.fromRGB(112,222,154),Color3.fromRGB(244,203,85),Color3.fromRGB(190,128,255),C.white}) do
             local color=v;local chip=btn(chips,"",23,25);chip.BackgroundColor3=color
             bindClick(chip,id,function() obj:SetValue(color) end)
         end
         connect(hex.FocusLost,function() obj:SetValue(hex.Text) end)
+        bindClick(reset,id.." reset color",function() obj:SetValue(cfg.Default) end)
         swatch.BackgroundColor3=cfg.Default;hex.Text=hexString(cfg.Default)
         bindClick(swatch,id,function() panel.Visible=not panel.Visible end)
         ui.Options[id]=obj;return obj
@@ -557,13 +577,14 @@ local Native,Window=(function()
             ScrollBarThickness=3,ScrollBarImageColor3=C.muted,Visible=false
         })
         pad(page,11);list(page,8)
-        local heading=text(page,cfg.Title,23,true);heading.Size=UDim2.new(1,0,0,36);heading.AutomaticSize=Enum.AutomaticSize.None
+        local heading=text(page,cfg.Title,23,true);heading.LayoutOrder=nextRowOrder(page);heading.Size=UDim2.new(1,0,0,36);heading.AutomaticSize=Enum.AutomaticSize.None
         if cfg.Title=="Settings" then
             searchBox=create("TextBox",page,{
                 Name="SettingsSearch",Size=UDim2.new(1,0,0,34),BackgroundColor3=C.row,BackgroundTransparency=0,
                 Text="",PlaceholderText="Search settings...",PlaceholderColor3=C.muted,TextColor3=C.text,
                 Font=Enum.Font.BuilderSans,TextSize=14,ClearTextOnFocus=false,BorderSizePixel=0
             })
+            searchBox.LayoutOrder=nextRowOrder(page)
             round(searchBox,7);stroke(searchBox)
             connect(searchBox:GetPropertyChangedSignal("Text"),applySettingsSearch)
         end
@@ -610,7 +631,8 @@ local Native,Window=(function()
     function ui:Destroy()
         drag=nil;windowDrag=nil
         if noticeTween then noticeTween:Cancel();noticeTween=nil end
-        table.clear(searchRows);screen:Destroy()
+        for tween in pairs(activeUITweens) do pcall(function() tween:Cancel() end) end
+        table.clear(activeUITweens);table.clear(rowOrder);table.clear(searchRows);screen:Destroy()
     end
     return ui,window
 end)()
@@ -2493,4 +2515,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V5.1] Native UI polish; Roblox runtime not tested.")
+print("[XandMe V5.2] Native control layout and color validation; Roblox runtime not tested.")
