@@ -1,11 +1,11 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V4.8 - RUNTIME DIAGNOSTICS
+    VELION DISTRICT HUB V5.0 - XANDME NATIVE UI
     For Roblox Violence District - client-side utility module.
-    Game UI uses upstream Fluent; the World ESP engine is local code.
+    Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
-    UI uses dawid-scripts Fluent, with individual ESP toggles and color controls.
-    Game internals can change. Auto input attempts are not confirmed success.
+    Existing observational features remain unverified; no game security bypass.
+    Manual skill-check and movement practice only.
 ]]
 
 local Players = game:GetService("Players")
@@ -31,7 +31,7 @@ end
 
 local state = {
     alive=true, playerESP=false, objectiveESP=false,
-    fullbright=false, noFog=false, noClip=false,
+    fullbright=false, lightIntensity=100, noFog=false, noClip=false,
     speed=false, speedValue=24, fov=70,
     customFov=false, fovMode="Preserve Dynamic", fovSmooth=0.18,
     smoothCamera=false, cameraTurnTime=0.08,
@@ -183,7 +183,7 @@ local function categoryColor(key: string): Color3
     return espColors[categoryName(key)] or espColors.Unknown
 end
 
--- The Fluent window is the only menu. This ScreenGui contains ESP overlays
+-- Native window is the only menu. This ScreenGui contains ESP overlays
 -- only, so no hidden large Frame can block mouse/touch interactions.
 local existingOverlay=playerGui:FindFirstChild("VelionDistrictOverlayV4")
 if existingOverlay then existingOverlay:Destroy() end
@@ -211,35 +211,332 @@ create("UIStroke",alert,{
     Color=espColors.Killer,Thickness=1,Transparency=.35
 })
 
-local okFluent,Fluent=pcall(function()
-    local url="https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"
-    return loadstring(game:HttpGet(url))()
-end)
-if not okFluent or type(Fluent)~="table" then
-    gui:Destroy()
-    warn("[Velion Fluent V4] Fluent download/load failed: "..tostring(Fluent))
-    return
-end
-local cameraSize=Workspace.CurrentCamera and Workspace.CurrentCamera.ViewportSize
-    or Vector2.new(1280,720)
-local uiWidth=math.min(600,math.max(310,cameraSize.X-24))
-local uiHeight=math.min(490,math.max(320,cameraSize.Y-80))
-local createdWindow,Window=pcall(function()
-    return Fluent:CreateWindow({
-        Title="XandMe.",
-        SubTitle="Velion District / V4.8",
-        TabWidth=cameraSize.X<500 and 116 or 150,
-        Size=UDim2.fromOffset(uiWidth,uiHeight),
-        Acrylic=false,Theme="Darker",
-        MinimizeKey=Enum.KeyCode.RightControl
+-- XandMe Native UI: opaque grayscale surfaces, native Roblox widgets.
+-- No external loader, library theme, or global input hooks.
+local Native,Window=(function()
+    local ui={Options={}}
+    local C={
+        black=Color3.fromRGB(7,7,7),sidebar=Color3.fromRGB(12,12,12),
+        row=Color3.fromRGB(21,21,21),button=Color3.fromRGB(32,32,32),
+        border=Color3.fromRGB(49,49,49),text=Color3.fromRGB(245,245,245),
+        muted=Color3.fromRGB(165,165,165),white=Color3.fromRGB(255,255,255),
+    }
+    local screen=create("ScreenGui",playerGui,{
+        Name="VelionDistrictHubV2",ResetOnSpawn=false,IgnoreGuiInset=false,
+        DisplayOrder=949,ZIndexBehavior=Enum.ZIndexBehavior.Sibling
     })
-end)
-if not createdWindow or not Window then
-    gui:Destroy()
-    pcall(function() Fluent:Destroy() end)
-    warn("[Velion Fluent V4] CreateWindow failed: "..tostring(Window))
-    return
-end
+    local function stroke(item)
+        create("UIStroke",item,{Color=C.border,Thickness=1,ApplyStrokeMode=Enum.ApplyStrokeMode.Border})
+    end
+    local function text(parent,caption,size,medium,color)
+        return create("TextLabel",parent,{
+            BackgroundTransparency=1,Text=caption,TextColor3=color or C.text,
+            TextSize=size,Font=medium and Enum.Font.GothamMedium or Enum.Font.Gotham,
+            TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Center,
+            TextWrapped=true,BorderSizePixel=0,
+            Size=UDim2.new(1,0,0,0),AutomaticSize=Enum.AutomaticSize.Y
+        })
+    end
+    local function btn(parent,caption,width,height)
+        local b=create("TextButton",parent,{
+            Text=caption,TextSize=12,Font=Enum.Font.GothamMedium,TextColor3=C.text,
+            BackgroundColor3=C.button,BackgroundTransparency=0,AutoButtonColor=true,
+            BorderSizePixel=0,Size=UDim2.fromOffset(width,height)
+        })
+        round(b,6);stroke(b)
+        return b
+    end
+    local function list(parent,padding,direction)
+        return create("UIListLayout",parent,{
+            FillDirection=direction or Enum.FillDirection.Vertical,
+            SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,padding)
+        })
+    end
+    local function pad(parent,n)
+        create("UIPadding",parent,{
+            PaddingTop=UDim.new(0,n),PaddingBottom=UDim.new(0,n),
+            PaddingLeft=UDim.new(0,n),PaddingRight=UDim.new(0,n)
+        })
+    end
+    local function safe(name,fn,...)
+        if not fn then return end
+        local ok,err=pcall(fn,...)
+        if not ok then runtimeLog.record("native UI / "..name,err) end
+    end
+    local function bindClick(b,name,fn)
+        connect(b.Activated,function()
+            if state.alive then safe(name,fn) end
+        end)
+    end
+    local root=create("Frame",screen,{
+        Name="XandMeWindow",AnchorPoint=Vector2.new(.5,.5),
+        Position=UDim2.fromScale(.5,.5),Size=UDim2.fromScale(.94,.88),
+        BackgroundColor3=C.black,BackgroundTransparency=0,BorderSizePixel=0,
+        ClipsDescendants=true,Visible=true
+    })
+    round(root,12);stroke(root)
+    create("UISizeConstraint",root,{MaxSize=Vector2.new(810,570)})
+    local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0})
+    local brand=text(header,"XandMe.",26,true)
+    brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-120,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
+    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.0",10,false,C.muted)
+    subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-120,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
+    local close=btn(header,"−",34,30)
+    close.AnchorPoint=Vector2.new(1,.5);close.Position=UDim2.new(1,-12,.5,0)
+    create("Frame",root,{Position=UDim2.fromOffset(0,62),Size=UDim2.new(1,0,0,1),BackgroundColor3=C.border,BorderSizePixel=0})
+    local sidebar=create("ScrollingFrame",root,{
+        Name="Navigation",Position=UDim2.fromOffset(0,63),Size=UDim2.new(.24,0,1,-63),
+        BackgroundColor3=C.sidebar,BackgroundTransparency=0,BorderSizePixel=0,
+        ScrollBarThickness=2,ScrollBarImageColor3=C.border,CanvasSize=UDim2.new(),
+        AutomaticCanvasSize=Enum.AutomaticSize.Y
+    })
+    pad(sidebar,8);list(sidebar,5)
+    local navTitle=text(sidebar,"WORKSPACE",10,true,C.muted);navTitle.LayoutOrder=0
+    local content=create("Frame",root,{
+        Position=UDim2.new(.24,0,0,63),Size=UDim2.new(.76,0,1,-63),
+        BackgroundColor3=C.black,BackgroundTransparency=0,BorderSizePixel=0
+    })
+    local window={Root=root,Minimized=false,Tabs={}}
+    function window:Minimize()
+        self.Minimized=not self.Minimized
+        root.Visible=not self.Minimized
+    end
+    bindClick(close,"close",function() window:Minimize() end)
+    connect(UserInputService.InputBegan,function(input)
+        if state.alive and input.KeyCode==Enum.KeyCode.RightControl and not UserInputService:GetFocusedTextBox() then
+            window:Minimize()
+        end
+    end)
+    local Methods={}
+    local drag=nil
+    connect(UserInputService.InputChanged,function(input)
+        if not drag or not state.alive then return end
+        if input==drag.input or (drag.input.UserInputType==Enum.UserInputType.MouseButton1 and input.UserInputType==Enum.UserInputType.MouseMovement) then
+            drag.update(input.Position.X)
+        end
+    end)
+    connect(UserInputService.InputEnded,function(input)
+        if drag and (input==drag.input or input.UserInputType==Enum.UserInputType.MouseButton1) then drag=nil end
+    end)
+    local function newRow(container,title,desc,rightWidth)
+        local frame=create("Frame",container,{
+            BackgroundColor3=C.row,BackgroundTransparency=0,BorderSizePixel=0,
+            Size=UDim2.new(1,0,0,0),AutomaticSize=Enum.AutomaticSize.Y
+        })
+        round(frame,8);stroke(frame);pad(frame,10)
+        create("UISizeConstraint",frame,{MinSize=Vector2.new(0,54)})
+        local left=create("Frame",frame,{
+            BackgroundTransparency=1,Size=UDim2.new(1,-rightWidth,0,0),
+            AutomaticSize=Enum.AutomaticSize.Y
+        })
+        list(left,4)
+        local heading=text(left,title,13,true);heading.LayoutOrder=1
+        local detail=text(left,desc or "",11,false,C.muted);detail.LayoutOrder=2;detail.Visible=detail.Text~=""
+        local result={Frame=frame}
+        function result:SetDesc(value)
+            detail.Text=tostring(value or "")
+            detail.Visible=detail.Text~=""
+        end
+        function result:SetTitle(value) heading.Text=tostring(value) end
+        if rightWidth>0 then
+            local actions=create("Frame",frame,{
+                AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,0,.5,0),
+                Size=UDim2.fromOffset(rightWidth-6,34),BackgroundTransparency=1
+            })
+            local layout=list(actions,5,Enum.FillDirection.Horizontal)
+            layout.HorizontalAlignment=Enum.HorizontalAlignment.Right
+            layout.VerticalAlignment=Enum.VerticalAlignment.Center
+            result.Actions=actions
+        end
+        return result
+    end
+    function Methods:AddParagraph(cfg)
+        return newRow(self.Container,cfg.Title,cfg.Content,0)
+    end
+    function Methods:AddButton(cfg)
+        local obj=newRow(self.Container,cfg.Title,cfg.Description,88)
+        local b=btn(obj.Actions,cfg.ButtonText or "OPEN",74,30)
+        bindClick(b,cfg.Title,cfg.Callback)
+        return obj
+    end
+    function Methods:AddSection(title)
+        local heading=text(self.Container,title,15,true)
+        heading.Size=UDim2.new(1,0,0,26);heading.AutomaticSize=Enum.AutomaticSize.None
+        return setmetatable({Container=self.Container},{__index=Methods})
+    end
+    function Methods:AddToggle(id,cfg)
+        local obj=newRow(self.Container,cfg.Title,cfg.Description,150)
+        obj.Value=cfg.Default==true;obj.Type="Toggle"
+        local key=btn(obj.Actions,"Unbound",67,30);key.LayoutOrder=1
+        local toggle=btn(obj.Actions,"OFF",43,30);toggle.LayoutOrder=3
+        function obj:SetBindText(value) key.Text=value or "Unbound" end
+        function obj:SetBindCallback(fn) self._bind=fn end
+        bindClick(key,id.." shortcut",function() if obj._bind then obj._bind() end end)
+        local function paint()
+            toggle.Text=obj.Value and "ON" or "OFF"
+            toggle.BackgroundColor3=obj.Value and C.white or C.button
+            toggle.TextColor3=obj.Value and C.black or C.muted
+        end
+        function obj:SetValue(value)
+            self.Value=value==true;paint();safe(id,cfg.Callback,self.Value)
+        end
+        bindClick(toggle,id,function() obj:SetValue(not obj.Value) end)
+        paint();ui.Options[id]=obj;self.lastToggle=obj
+        return obj
+    end
+    function Methods:AddSlider(id,cfg)
+        local row=newRow(self.Container,cfg.Title,cfg.Description,65)
+        local valueText=text(row.Actions,"",12,true)
+        valueText.AutomaticSize=Enum.AutomaticSize.None;valueText.Size=UDim2.fromOffset(54,26)
+        valueText.TextXAlignment=Enum.TextXAlignment.Right
+        local railFrame=create("Frame",self.Container,{
+            BackgroundColor3=C.row,BackgroundTransparency=0,BorderSizePixel=0,
+            Size=UDim2.new(1,0,0,31)
+        })
+        round(railFrame,6)
+        local rail=create("Frame",railFrame,{
+            Position=UDim2.new(0,12,.5,-4),Size=UDim2.new(1,-24,0,8),
+            BackgroundColor3=C.border,BorderSizePixel=0,Active=true
+        })
+        round(rail,4)
+        local fill=create("Frame",rail,{Size=UDim2.fromScale(0,1),BackgroundColor3=C.white,BorderSizePixel=0})
+        round(fill,4)
+        local knob=create("Frame",rail,{AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(0,.5),Size=UDim2.fromOffset(15,15),BackgroundColor3=C.white,BorderSizePixel=0})
+        round(knob,8)
+        local obj={Type="Slider",Value=cfg.Default}
+        local min,max,precision=cfg.Min,cfg.Max,math.clamp(cfg.Rounding or 0,0,3)
+        local function normalize(v)
+            local number=tonumber(v)
+            if not number or number~=number or math.abs(number)==math.huge then return obj.Value end
+            local factor=10^precision
+            return math.clamp(math.floor(number*factor+.5)/factor,min,max)
+        end
+        local function paint()
+            local t=(obj.Value-min)/math.max(.00001,max-min)
+            fill.Size=UDim2.fromScale(t,1);knob.Position=UDim2.fromScale(t,.5)
+            valueText.Text=string.format("%."..precision.."f",obj.Value)
+        end
+        function obj:SetValue(v)
+            self.Value=normalize(v);paint();safe(id,cfg.Callback,self.Value)
+        end
+        local function move(x)
+            if rail.AbsoluteSize.X<=0 then return end
+            obj:SetValue(min+math.clamp((x-rail.AbsolutePosition.X)/rail.AbsoluteSize.X,0,1)*(max-min))
+        end
+        connect(rail.InputBegan,function(input)
+            if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
+                drag={input=input,update=move};move(input.Position.X)
+            end
+        end)
+        obj.Value=normalize(cfg.Default);paint();ui.Options[id]=obj
+        return obj
+    end
+    function Methods:AddDropdown(id,cfg)
+        local row=newRow(self.Container,cfg.Title,cfg.Description,116)
+        local b=btn(row.Actions,"",104,30)
+        local panel=create("Frame",self.Container,{
+            Size=UDim2.new(1,0,0,0),AutomaticSize=Enum.AutomaticSize.Y,
+            BackgroundColor3=C.row,BorderSizePixel=0,Visible=false
+        })
+        round(panel,7);pad(panel,8);list(panel,4)
+        local obj={Type="Dropdown",Value=type(cfg.Default)=="number" and cfg.Values[cfg.Default] or cfg.Default}
+        if not table.find(cfg.Values,obj.Value) then obj.Value=cfg.Values[1] end
+        function obj:SetValue(v)
+            if not table.find(cfg.Values,v) then return end
+            self.Value=v;b.Text=tostring(v);panel.Visible=false;safe(id,cfg.Callback,v)
+        end
+        for _,value in ipairs(cfg.Values) do
+            local v=value
+            local option=btn(panel,tostring(v),100,30);option.Size=UDim2.new(1,0,0,30)
+            bindClick(option,id,function() obj:SetValue(v) end)
+        end
+        b.Text=tostring(obj.Value)
+        bindClick(b,id,function() panel.Visible=not panel.Visible end)
+        ui.Options[id]=obj;return obj
+    end
+    function Methods:AddColorpicker(id,cfg)
+        local parentRow=self.lastToggle
+        local row=parentRow and parentRow.Actions and parentRow or newRow(self.Container,cfg.Title,cfg.Description,54)
+        local swatch=btn(row.Actions,"",22,24);swatch.LayoutOrder=2
+        local panel=create("Frame",self.Container,{
+            Size=UDim2.new(1,0,0,0),AutomaticSize=Enum.AutomaticSize.Y,
+            BackgroundColor3=C.row,BorderSizePixel=0,Visible=false
+        })
+        round(panel,7);pad(panel,9);list(panel,6)
+        text(panel,cfg.Title.." / color",12,true)
+        local chips=create("Frame",panel,{Size=UDim2.new(1,0,0,29),BackgroundTransparency=1})
+        list(chips,5,Enum.FillDirection.Horizontal)
+        local hex=create("TextBox",panel,{
+            Size=UDim2.new(1,0,0,30),BackgroundColor3=C.button,TextColor3=C.text,
+            Font=Enum.Font.Gotham,TextSize=12,ClearTextOnFocus=false,
+            PlaceholderText="#RRGGBB",Text="",BorderSizePixel=0
+        })
+        round(hex,5)
+        local obj={Type="Colorpicker",Value=cfg.Default}
+        local function hexString(c)
+            return string.format("#%02X%02X%02X",math.floor(c.R*255+.5),math.floor(c.G*255+.5),math.floor(c.B*255+.5))
+        end
+        function obj:SetValue(v)
+            if typeof(v)=="string" then
+                local raw=v:gsub("^#","")
+                if not raw:match("^%x%x%x%x%x%x$") then hex.Text=hexString(self.Value);return end
+                v=Color3.fromRGB(tonumber(raw:sub(1,2),16),tonumber(raw:sub(3,4),16),tonumber(raw:sub(5,6),16))
+            end
+            if typeof(v)~="Color3" then return end
+            self.Value=v;swatch.BackgroundColor3=v;hex.Text=hexString(v)
+            safe(id,cfg.Callback,v)
+        end
+        for _,v in ipairs({cfg.Default,Color3.fromRGB(255,80,91),Color3.fromRGB(78,173,252),Color3.fromRGB(112,222,154),Color3.fromRGB(244,203,85),Color3.fromRGB(190,128,255),C.white}) do
+            local color=v;local chip=btn(chips,"",23,25);chip.BackgroundColor3=color
+            bindClick(chip,id,function() obj:SetValue(color) end)
+        end
+        connect(hex.FocusLost,function() obj:SetValue(hex.Text) end)
+        swatch.BackgroundColor3=cfg.Default;hex.Text=hexString(cfg.Default)
+        bindClick(swatch,id,function() panel.Visible=not panel.Visible end)
+        ui.Options[id]=obj;return obj
+    end
+    function window:AddTab(cfg)
+        local index=#self.Tabs+1
+        local nav=btn(sidebar,cfg.Title,100,35)
+        nav.Size=UDim2.new(1,0,0,35);nav.LayoutOrder=index
+        nav.TextSize=11;nav.TextWrapped=true
+        local page=create("ScrollingFrame",content,{
+            Name=cfg.Title,Size=UDim2.fromScale(1,1),BackgroundTransparency=1,
+            BorderSizePixel=0,CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,
+            ScrollBarThickness=3,ScrollBarImageColor3=C.muted,Visible=false
+        })
+        pad(page,11);list(page,8)
+        local heading=text(page,cfg.Title,23,true);heading.Size=UDim2.new(1,0,0,36);heading.AutomaticSize=Enum.AutomaticSize.None
+        local tab=setmetatable({Container=page,Nav=nav},{__index=Methods})
+        self.Tabs[index]=tab
+        bindClick(nav,"navigation",function() window:SelectTab(index) end)
+        return tab
+    end
+    function window:SelectTab(index)
+        for i,tab in ipairs(self.Tabs) do
+            local active=i==index
+            tab.Container.Visible=active
+            tab.Nav.BackgroundColor3=active and C.white or C.sidebar
+            tab.Nav.TextColor3=active and C.black or C.muted
+        end
+    end
+    local notice=nil
+    function ui:Notify(cfg)
+        if notice then notice:Destroy() end
+        local toast=create("Frame",screen,{
+            AnchorPoint=Vector2.new(1,1),Position=UDim2.new(1,-12,1,-12),
+            Size=UDim2.new(.85,0,0,0),AutomaticSize=Enum.AutomaticSize.Y,
+            BackgroundColor3=C.black,BorderSizePixel=0
+        })
+        notice=toast;round(toast,8);stroke(toast);pad(toast,12);list(toast,5)
+        create("UISizeConstraint",toast,{MaxSize=Vector2.new(340,1000)})
+        text(toast,cfg.Title or "XandMe",13,true)
+        text(toast,cfg.Content or "",11,false,C.muted)
+        task.delay(cfg.Duration or 3,function() if toast.Parent then toast:Destroy() end;if notice==toast then notice=nil end end)
+    end
+    function ui:Destroy() drag=nil;screen:Destroy() end
+    return ui,window
+end)()
 local Tabs={
     Main=Window:AddTab({Title="Dashboard",Icon="layout-dashboard"}),
     Players=Window:AddTab({Title="Player ESP",Icon="users"}),
@@ -250,7 +547,7 @@ local Tabs={
     Visual=Window:AddTab({Title="Visual",Icon="eye"}),
     Settings=Window:AddTab({Title="Settings",Icon="settings"})
 }
-local Options=Fluent.Options
+local Options=Native.Options
 local controls={}
 local toggles={}
 local toggleTitles={}
@@ -305,13 +602,12 @@ local lightingOriginal={
 }
 local atmosphereOriginal=setmetatable({}, {__mode="k"})
 local function updateLighting()
-    Lighting.Brightness=state.fullbright and 3 or lightingOriginal.Brightness
-    Lighting.ClockTime=state.fullbright and 14 or lightingOriginal.ClockTime
-    Lighting.Ambient=state.fullbright and Color3.fromRGB(235,235,235)
-        or lightingOriginal.Ambient
-    Lighting.OutdoorAmbient=state.fullbright and Color3.fromRGB(235,235,235)
-        or lightingOriginal.OutdoorAmbient
-    if state.fullbright then
+    local intensity=state.fullbright and math.clamp(state.lightIntensity/100,0,1) or 0
+    Lighting.Brightness=lightingOriginal.Brightness+(3-lightingOriginal.Brightness)*intensity
+    Lighting.ClockTime=lightingOriginal.ClockTime+(14-lightingOriginal.ClockTime)*intensity
+    Lighting.Ambient=lightingOriginal.Ambient:Lerp(Color3.fromRGB(235,235,235),intensity)
+    Lighting.OutdoorAmbient=lightingOriginal.OutdoorAmbient:Lerp(Color3.fromRGB(235,235,235),intensity)
+    if state.fullbright and intensity>0 then
         Lighting.GlobalShadows=false
     else
         Lighting.GlobalShadows=lightingOriginal.GlobalShadows
@@ -444,7 +740,7 @@ local function monitorKillerAbility(other,role,now)
         state.abilityNotificationCount+=1
         if state.abilityNotify then
             pcall(function()
-                Fluent:Notify({
+                Native:Notify({
                     Title="Killer Ability",
                     Content=state.abilityLast,
                     Duration=4
@@ -1213,7 +1509,16 @@ local cameraController=(function()
         refreshPose()
         setEnabled(false)
     end
-    return {setEnabled=setEnabled,refreshPose=refreshPose,shutdown=shutdown,nativeFreeLookInfo=nativeFreeLookInfo}
+    local function status()
+        local cam=Workspace.CurrentCamera
+        if not cam then return "No active camera." end
+        local actual=cam.FieldOfView
+        local info=string.format("Actual: %.1f° | target: %.1f° | type: %s",actual,state.fov,cam.CameraType.Name)
+        if not state.customFov then return info.."\nCustom FOV is OFF." end
+        if not eligible(cam) then return info.."\nNative controller unavailable for this camera. No override." end
+        return info.."\nCustom FOV requested; game compatibility is unverified."
+    end
+    return {setEnabled=setEnabled,refreshPose=refreshPose,shutdown=shutdown,nativeFreeLookInfo=nativeFreeLookInfo,status=status}
 end)()
 local function setSpeed(value)
     state.speed=value
@@ -1234,104 +1539,14 @@ end
 
 
 
--- Moonwalk A/D: local controller assist, no simulated keypress or sprint hack.
--- With the mode on, hold A or D to advance with a mild side steer
--- while the avatar faces the camera (opposite its movement direction).
--- This is a visual movement approximation, not an exact DBD animation.
-local moonwalkBindName="VelionMoonwalkAD_"..tostring(player.UserId)
-local moonwalkBound=false
-local moonwalkCharacterHumanoid: Humanoid?=nil
-local moonwalkOriginalAutoRotate: boolean?=nil
-local function restoreMoonwalkRotation()
-    if moonwalkCharacterHumanoid and moonwalkCharacterHumanoid.Parent
-        and moonwalkOriginalAutoRotate~=nil then
-        moonwalkCharacterHumanoid.AutoRotate=moonwalkOriginalAutoRotate
-    end
-    moonwalkCharacterHumanoid=nil
-    moonwalkOriginalAutoRotate=nil
-end
-local function moonwalkStep(deltaTime: number)
-    if not state.alive or not state.moonwalk then return end
-    if UserInputService:GetFocusedTextBox() then
-        restoreMoonwalkRotation()
-        return
-    end
-    local character=player.Character
-    local humanoid=character and character:FindFirstChildOfClass("Humanoid")
-    local root=character and character:FindFirstChild("HumanoidRootPart")
-    local camera=Workspace.CurrentCamera
-    if not humanoid or not root or not camera or humanoid.Health<=0 then
-        restoreMoonwalkRotation()
-        state.moonwalkStatus="ON | waiting for character/camera"
-        return
-    end
-    if humanoid.Sit or root.Anchored then
-        restoreMoonwalkRotation()
-        state.moonwalkStatus="ON | paused (seated/anchored)"
-        return
-    end
-    local left=UserInputService:IsKeyDown(Enum.KeyCode.A)
-    local right=UserInputService:IsKeyDown(Enum.KeyCode.D)
-    if not left and not right then
-        restoreMoonwalkRotation()
-        state.moonwalkStatus="ON | hold A/D to moonwalk"
-        return
-    end
-    if moonwalkCharacterHumanoid~=humanoid then
-        restoreMoonwalkRotation()
-        moonwalkCharacterHumanoid=humanoid
-        moonwalkOriginalAutoRotate=humanoid.AutoRotate
-    end
-    humanoid.AutoRotate=false
-    local look=camera.CFrame.LookVector
-    local forward=Vector3.new(look.X,0,look.Z)
-    if forward.Magnitude<.01 then return end
-    forward=forward.Unit
-    local rightVector=Vector3.new(camera.CFrame.RightVector.X,0,
-        camera.CFrame.RightVector.Z)
-    if rightVector.Magnitude<.01 then return end
-    rightVector=rightVector.Unit
-    local strafe=(right and 1 or 0)-(left and 1 or 0)
-    local travel=forward+rightVector*strafe*state.moonwalkSteer
-    if travel.Magnitude>.01 then
-        -- Called just after the default PlayerModule input processing.
-        humanoid:Move(travel.Unit,false)
-        -- Rotate only; do not translate/teleport HumanoidRootPart.
-        -- Facing the camera makes forward travel appear backward.
-        local facing=CFrame.lookAt(root.Position,root.Position-forward)
-        root.CFrame=root.CFrame:Lerp(facing,math.clamp(deltaTime*13,0,1))
-        state.moonwalkStatus="ON | A/D steering active (client-side)"
-    end
-end
+-- Manual input practice: never writes Humanoid.Move, AutoRotate, or root CFrame.
 local function setMoonwalk(enabled: boolean)
     state.moonwalk=enabled
-    if enabled then
-        if moonwalkBound then return end
-        local ok,err=pcall(function()
-            RunService:BindToRenderStep(moonwalkBindName,
-                Enum.RenderPriority.Input.Value+5,moonwalkStep)
-        end)
-        if ok then
-            moonwalkBound=true
-            state.moonwalkStatus="ON | hold A/D"
-        else
-            state.moonwalk=false
-            state.moonwalkStatus="Bind failed: "..tostring(err):sub(1,75)
-        end
-    else
-        if moonwalkBound then
-            pcall(function()
-                RunService:UnbindFromRenderStep(moonwalkBindName)
-            end)
-            moonwalkBound=false
-        end
-        restoreMoonwalkRotation()
-        state.moonwalkStatus="OFF | standard Roblox controls restored"
-    end
+    state.moonwalkStatus=enabled and "Practice ON | use native W/A/S/D controls" or "Practice OFF"
 end
 
 -- =========================================
--- Fluent menu - actual controls, not decorative rectangles.
+-- Native controls.
 -- =========================================
 local statusMain=Tabs.Main:AddParagraph({
     Title="CURRENT SESSION",Content="Reading players and map..."
@@ -1345,7 +1560,7 @@ local statusSkill=Tabs.Main:AddParagraph({
 local statusNext=Tabs.Main:AddParagraph({
     Title="NEXT KILLER (ESTIMATE)",Content="Waiting for lobby"
 })
-registerToggle(Tabs.Main,"PlayerESPMaster","Player ESP Master",
+registerToggle(Tabs.Players,"PlayerESPMaster","Enable player markers",
     "Overall player outlines / nametags switch","playerESP",
     function(value)
         if not value then
@@ -1354,7 +1569,7 @@ registerToggle(Tabs.Main,"PlayerESPMaster","Player ESP Master",
             end
         end
     end)
-registerToggle(Tabs.Main,"ObjectESPMaster","Object ESP Master",
+registerToggle(Tabs.Objects,"ObjectESPMaster","Enable map markers",
     "Show map object highlights and labels","objectiveESP",
     function(value)
         if value then startObjectiveScan()
@@ -1367,23 +1582,24 @@ registerToggle(Tabs.Main,"ObjectESPMaster","Object ESP Master",
         refreshObjectiveVisibility()
     end)
 
--- Player ESP: each category has a separate ON/OFF.
+-- Player ESP: category and display toggles are independent.
+Tabs.Players:AddParagraph({Title="How to use",Content="Enable player markers, choose a category, then enable names or body highlight. Detection remains unverified."})
 registerToggle(Tabs.Players,"KillerESP","Killer ESP",
     "Killer character outline + labels","killerESP")
-registerColor(Tabs.Players,"KillerColor","Killer Outline Color","Killer")
+registerColor(Tabs.Players,"KillerColor","Killer Color","Killer")
 registerToggle(Tabs.Players,"SurvivorESP","Survivor ESP",
     "Survivor character outline + labels","survivorESP")
-registerColor(Tabs.Players,"SurvivorColor","Survivor Outline Color","Survivor")
+registerColor(Tabs.Players,"SurvivorColor","Survivor Color","Survivor")
 registerToggle(Tabs.Players,"UnknownESP","Unknown Role Markers",
     "Disabled by default; prevents lobby role false positives","unknownESP")
 registerToggle(Tabs.Players,"SurvivorItems","Survivor Equipped Items",
     "Show Tool names equipped by visible Survivor characters",
     "survivorItemsESP")
-registerToggle(Tabs.Players,"PlayerOutline","Outlines Enabled",
-    "Use through-wall Highlight for players","playerHighlight")
-registerToggle(Tabs.Players,"NameESP","Player Name Tags",
+registerToggle(Tabs.Players,"PlayerOutline","Body Highlight",
+    "Color or outline the character model","playerHighlight")
+registerToggle(Tabs.Players,"NameESP","Player Names",
     "Show names and roles","playerNames")
-registerToggle(Tabs.Players,"DistanceESP","Distance ESP",
+registerToggle(Tabs.Players,"DistanceESP","Show Distance",
     "Show stud distance on name tags","playerDistance")
 registerToggle(Tabs.Players,"MaskESP","Killer Mask ESP",
     "Display replicated mask name","playerMask")
@@ -1402,37 +1618,38 @@ registerToggle(Tabs.Players,"KillerWarn","Killer Proximity Alert",
     "Notify when known killer is less than 99 studs","killerAlert")
 
 -- Object ESP: separate toggle and color selector per kind.
-registerToggle(Tabs.Objects,"ObjectOutline","Object Outlines",
+Tabs.Objects:AddParagraph({Title="How to use",Content="Enable map markers, select an object category and enable labels or outlines. Click the color square to edit its color."})
+registerToggle(Tabs.Objects,"ObjectOutline","Object Highlight",
     "Enable object Highlight outlines / fill","objectHighlight",
     function() refreshObjectiveVisibility() end)
 registerToggle(Tabs.Objects,"GeneratorESP","Generator ESP",
     "Generator highlight + location","generatorESP",
     function() refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"GeneratorColor","Generator Outline Color","Generator")
+registerColor(Tabs.Objects,"GeneratorColor","Generator Color","Generator")
 registerToggle(Tabs.Objects,"GenProgress","Generator Repair %",
     "Show replicated repair percent","generatorProgressESP",
     function() refreshObjectiveVisibility() end)
 registerToggle(Tabs.Objects,"PalletESP","Pallet ESP",
     "Both Pallet / Palletwrong","palletESP",
     function() refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"PalletColor","Pallet Outline Color","Pallet")
+registerColor(Tabs.Objects,"PalletColor","Pallet Color","Pallet")
 registerToggle(Tabs.Objects,"WindowESP","Window ESP",
     "Window map objects","windowESP",
     function() refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"WindowColor","Window Outline Color","Window")
+registerColor(Tabs.Objects,"WindowColor","Window Color","Window")
 registerToggle(Tabs.Objects,"HookESP","Hook ESP",
     "Map Hook models","hookESP",
     function() refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"HookColor","Hook Outline Color","Hook")
+registerColor(Tabs.Objects,"HookColor","Hook Color","Hook")
 registerToggle(Tabs.Objects,"GateESP","Gate ESP",
     "Exit gates","gateESP",
     function() refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"GateColor","Gate Outline Color","Gate")
+registerColor(Tabs.Objects,"GateColor","Gate Color","Gate")
 registerToggle(Tabs.Objects,"WorldItems","World Pickup Items",
     "Show Tool and recognized pickup objects within Map/Interactables",
     "worldItemsESP",
     function() lastObjectiveRefresh=0;refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"ItemColor","World Item Outline Color","Item")
+registerColor(Tabs.Objects,"ItemColor","Item Color","Item")
 local itemInfo=Tabs.Objects:AddParagraph({
     Title="SURVIVOR ITEMS ESP",
     Content="Replicated world Tools and pickup prompts only. Unreplicated inventories are unavailable."
@@ -1464,7 +1681,7 @@ local progressDropdown=Tabs.Objects:AddDropdown("GeneratorProgressScale",{
     end
 })
 controls.GeneratorProgressScale=progressDropdown
-registerToggle(Tabs.Objects,"ObjectLabels","Objective Nametags",
+registerToggle(Tabs.Objects,"ObjectLabels","Object Labels",
     "Display labels without crowding the screen","objectLabels",
     function() lastObjectiveRefresh=0;refreshObjectiveVisibility() end)
 registerSlider(Tabs.Objects,"MaxLabels","Maximum Object Labels",
@@ -1519,16 +1736,14 @@ Tabs.Killer:AddParagraph({
 -- Survivor mechanics only where source references are available.
 registerToggle(Tabs.Survivor,"MonitorSkill","Skill Check Monitor",
     "Read Line / Goal rotation from the game UI","skillMonitor")
-registerToggle(Tabs.Survivor,"AutoSkillCheck","Auto Skill Check (experimental)",
-    "Attempts mobile input; game acceptance cannot be confirmed","autoSkillCheck",
-    function(v)
-        state.inputStatus=v and "Enabled, awaiting a Skill Check"
-            or "Disabled"
-    end)
+Tabs.Survivor:AddParagraph({
+    Title="Manual skill checks",
+    Content="Automatic generator input is not included in this version. Practice manually; game detection is not verified."
+})
 registerToggle(Tabs.Survivor,"NextKiller","Next Killer Estimate",
     "Based on AllowKiller and KillerChance","nextKiller")
 local inputStatus=Tabs.Survivor:AddParagraph({
-    Title="AUTO INPUT STATUS",Content="Auto input disabled"
+    Title="INPUT STATUS",Content="Manual input only"
 })
 local skillStatus=Tabs.Survivor:AddParagraph({
     Title="SKILL CHECK STATUS",Content="Reading..."
@@ -1547,22 +1762,21 @@ Tabs.Movement:AddButton({
         if toggles.MoonwalkAD then toggles.MoonwalkAD:SetValue(false) end
     end
 })
-local moonwalkToggle=registerToggle(Tabs.Movement,
-    "MoonwalkAD","Moonwalk A/D Assist",
-    "ON: hold A/D to steer forward while facing the camera",
+registerToggle(Tabs.Movement,
+    "MoonwalkAD","Moonwalk Input Practice",
+    "Shows manual A/D input without changing movement or rotation.",
     "moonwalk",setMoonwalk)
-registerSlider(Tabs.Movement,"MoonwalkSteer","Moonwalk Steering",
-    "Side steering strength while holding A or D",
-    state.moonwalkSteer,.1,.65,2,
-    function(value) state.moonwalkSteer=value end)
 local moonwalkStatusBox=Tabs.Movement:AddParagraph({
-    Title="MOONWALK STATUS",Content="OFF | assign a shortcut or enable toggle"
+    Title="INPUT STATUS",Content="Practice OFF"
 })
 
 
 registerToggle(Tabs.Visual,"Fullbright","Fullbright",
     "Lighten environment locally","fullbright",
     function() updateLighting() end)
+registerSlider(Tabs.Visual,"LightIntensity","Lighting Intensity",
+    "0 = native lighting, 100 = full brightness. Enable Fullbright first.",
+    state.lightIntensity,0,100,0,function(v) state.lightIntensity=v;if state.fullbright then updateLighting() end end)
 registerToggle(Tabs.Visual,"NoFog","Remove Fog",
     "Reduce atmosphere density and fog","noFog",
     function() updateLighting() end)
@@ -1573,6 +1787,7 @@ Tabs.Visual:AddParagraph({
 registerToggle(Tabs.Visual,"CustomFov","Custom FOV",
     "Optional local lens override; OFF restores native FOV.",
     "customFov",cameraController.setEnabled)
+local cameraStatusBox=Tabs.Visual:AddParagraph({Title="Camera status",Content="Waiting for camera..."})
 local fovSlider=registerSlider(Tabs.Visual,"CameraFov","Field of View",
     "Vertical FOV in degrees (native maximum 120).",
     state.fov,60,120,0,function(v) state.fov=v end)
@@ -1617,7 +1832,7 @@ Tabs.Visual:AddButton({
     Title="Native Free-Look Setup",
     Description="Check whether Roblox CameraToggle is available. No forced camera mode.",
     Callback=function()
-        Fluent:Notify({Title="Native Free-Look",Content=cameraController.nativeFreeLookInfo(),Duration=8})
+        Native:Notify({Title="Native Free-Look",Content=cameraController.nativeFreeLookInfo(),Duration=8})
     end
 })
 Tabs.Visual:AddButton({
@@ -1633,10 +1848,10 @@ Tabs.Visual:AddButton({
 })
 
 -- Fixed dark theme and native menu shortcut. Gameplay preferences never auto-enable.
-local glassModeStatus="Darker / opaque base"
+local glassModeStatus="Native opaque monochrome"
 Tabs.Settings:AddParagraph({
     Title="XANDME / MONOCHROME",
-    Content="Right Ctrl opens and closes the menu. Every feature starts OFF. Shortcut assignments are independent of feature states."
+    Content="Right Ctrl opens or closes the menu. Features start OFF and can be enabled individually. Click Unbound on a feature row to assign its key."
 })
 local manualCursor=false
 local cursorModal=create("TextButton",Window.Root,{
@@ -1700,7 +1915,10 @@ local function saveBindings()
 end
 local function refreshKeyRows()
     for id,row in pairs(keyRows) do
-        row:SetDesc(captureId==id and "Press a key... Esc cancels / Backspace clears" or (bindings[id] or "Unbound"))
+        local value=bindings[id] or "Unbound"
+        row:SetDesc(captureId==id and "Press a key... Esc cancels / Backspace clears" or value)
+        local toggle=toggles[id]
+        if toggle and toggle.SetBindText then toggle:SetBindText(captureId==id and "Press key" or value) end
     end
 end
 if canSave then
@@ -1721,18 +1939,18 @@ local keySection=Tabs.Settings:AddSection("Feature shortcuts")
 keySection:AddParagraph({Title="Press to bind",Content="Click any row and press a keyboard key (including Numpad). Esc cancels; Backspace/Delete clears. Right Ctrl is reserved."})
 for _,id in ipairs(toggleOrder) do
     local featureId=id
+    local function beginCapture() captureId=featureId;refreshKeyRows() end
+    toggles[featureId]:SetBindCallback(beginCapture)
     keyRows[featureId]=keySection:AddButton({
-        Title=toggleTitles[featureId],
+        Title=toggleTitles[featureId],ButtonText="BIND",
         Description=bindings[featureId] or "Unbound",
-        Callback=function()
-            captureId=featureId
-            refreshKeyRows()
-        end
+        Callback=beginCapture
     })
 end
+refreshKeyRows()
 toggleTitles[safetyActionId]="Emergency Disable"
 keyRows[safetyActionId]=keySection:AddButton({
-    Title="Emergency Disable",
+    Title="Emergency Disable",ButtonText="BIND",
     Description=bindings[safetyActionId] or "Unbound",
     Callback=function() captureId=safetyActionId;refreshKeyRows() end
 })
@@ -1751,7 +1969,7 @@ connect(UserInputService.InputBegan,function(input,processed)
         if not keyAllowed(name) then return end
         for id,existing in pairs(bindings) do
             if id~=captureId and existing==name then
-                Fluent:Notify({Title="Shortcut conflict",Content="Already assigned to "..toggleTitles[id],Duration=3})
+                Native:Notify({Title="Shortcut conflict",Content="Already assigned to "..toggleTitles[id],Duration=3})
                 return
             end
         end
@@ -1936,99 +2154,64 @@ syncCursor()
 
 Tabs.Settings:AddButton({
     Title="Unload Velion Hub",
-    Description="Disconnect features and close the Fluent window",
+    Description="Disconnect features and close the native window",
     Callback=function()
         local f=environment.VelionVDCleanup
         if type(f)=="function" then f() end
     end
 })
--- Fluent and SaveManager diagnostics (no automatic destructive filesystem tests).
-local configStatus="Filesystem APIs unavailable; saving disabled"
-local saveManager=nil
-local interfaceManager=nil
-local uiStatus=Tabs.Settings:AddParagraph({
-    Title="FLUENT UI HEALTH",
-    Content="Checks available after UI load; live click verification required."
-})
-local configStatusBox=Tabs.Settings:AddParagraph({
-    Title="SAVEMANAGER STATUS",
-    Content="Checking filesystem and addon API availability..."
-})
-local function runUISelfCheck(): string
-    local tabCount,toggleCount,controlCount=0,0,0
-    for _ in pairs(Tabs) do tabCount+=1 end
-    for _ in pairs(toggles) do toggleCount+=1 end
-    for _ in pairs(controls) do controlCount+=1 end
-    local issues={}
-    if type(Fluent.CreateWindow)~="function" then
-        issues[#issues+1]="Fluent.CreateWindow missing"
-    end
-    if type(Window.AddTab)~="function" then
-        issues[#issues+1]="Window.AddTab missing"
-    end
-    if type(Window.SelectTab)~="function" then
-        issues[#issues+1]="Window.SelectTab missing"
-    end
-    if type(statusMain.SetDesc)~="function" then
-        issues[#issues+1]="Paragraph.SetDesc missing"
-    end
-    if tabCount<8 then issues[#issues+1]="Fewer than 8 tabs" end
-    if toggleCount<25 then issues[#issues+1]="Too few registered toggles" end
-    local summary=(#issues==0) and "API checks passed"
-        or table.concat(issues,"; ")
-    return string.format(
-        "%s | %d tabs, %d toggles, %d option controls\n"
-        .."%s | Runtime actions and FPS not yet verified",
-        summary,tabCount,toggleCount,controlCount,glassModeStatus)
-end
-Tabs.Settings:AddButton({
-    Title="Run Fluent UI Self-Check",
-    Description="Verify registered tabs, toggles and methods (no gameplay actions)",
-    Callback=function()
-        uiStatus:SetDesc(runUISelfCheck())
-        configStatusBox:SetDesc(configStatus)
-    end
-})
-local hasFilesystem=type(isfolder)=="function"
-    and type(makefolder)=="function" and type(readfile)=="function"
-    and type(writefile)=="function"
-if hasFilesystem then
-    local okModules,first,second=pcall(function()
-        local base="https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/"
-        return loadstring(game:HttpGet(base.."SaveManager.lua"))(),
-            loadstring(game:HttpGet(base.."InterfaceManager.lua"))()
-    end)
-    if okModules and first and second then
-        local okSetup,err=pcall(function()
-            first:SetLibrary(Fluent)
-            second:SetLibrary(Fluent)
-            first:IgnoreThemeSettings()
-            second:SetFolder("VelionDistrict")
-            first:SetFolder("VelionDistrict/profiles")
-            -- Keep fixed Right Ctrl and monochrome theme; no automatic feature activation.
-            first:BuildConfigSection(Tabs.Settings)
-        end)
-        if okSetup then
-            saveManager=first
-            interfaceManager=second
-            configStatus="Manual profiles only. Startup feature autoload disabled; keybinds have separate storage."
-        else
-            configStatus="Addon setup error: "..tostring(err):sub(1,170)
-        end
-    else
-        configStatus="Addon download/load failed: "..tostring(first):sub(1,170)
-    end
-end
-configStatusBox:SetDesc(configStatus)
-uiStatus:SetDesc(runUISelfCheck())
-pcall(function() Window:SelectTab(1) end)
-pcall(function()
-    Fluent:Notify({
-        Title="XandMe Monochrome",
-        Content="Right Ctrl: menu. All feature toggles start disabled.",
-        Duration=5
+-- Native preferences: persist only non-toggle values. Features always start OFF.
+do
+    local configStatusBox=Tabs.Settings:AddParagraph({
+        Title="Preferences",Content=canSave and "Local keybind and preference storage available." or "Local storage unavailable; settings apply to this session only."
     })
-end)
+    local prefPath="VelionDistrict/xandme-preferences.json"
+    local function savePreferences()
+        if not canSave then return end
+        local ok,err=pcall(function()
+            local data={}
+            for id,obj in pairs(controls) do
+                if obj.Type=="Slider" or obj.Type=="Dropdown" then data[id]=obj.Value
+                elseif obj.Type=="Colorpicker" then
+                    local c=obj.Value
+                    data[id]=string.format("#%02X%02X%02X",math.floor(c.R*255+.5),math.floor(c.G*255+.5),math.floor(c.B*255+.5))
+                end
+            end
+            if not isfolder("VelionDistrict") then makefolder("VelionDistrict") end
+            writefile(prefPath,HttpService:JSONEncode(data))
+        end)
+        configStatusBox:SetDesc(ok and "Preferences saved. Feature toggles were not saved." or "Save failed: "..tostring(err):sub(1,120))
+    end
+    local function loadPreferences()
+        if not canSave then return end
+        local ok,err=pcall(function()
+            if not isfile(prefPath) then return end
+            local data=HttpService:JSONDecode(readfile(prefPath))
+            if type(data)~="table" then return end
+            for id,obj in pairs(controls) do
+                local v=data[id]
+                if obj.Type=="Slider" and type(v)=="number" then obj:SetValue(v)
+                elseif (obj.Type=="Dropdown" or obj.Type=="Colorpicker") and type(v)=="string" then obj:SetValue(v) end
+            end
+        end)
+        if not ok then configStatusBox:SetDesc("Load failed: "..tostring(err):sub(1,120)) end
+    end
+    Tabs.Settings:AddButton({Title="Save Preferences",Description="Save color, slider and dropdown values, not feature ON/OFF state.",ButtonText="SAVE",Callback=savePreferences})
+    Tabs.Settings:AddButton({Title="Load Preferences",Description="Reload saved visual preferences only.",ButtonText="LOAD",Callback=loadPreferences})
+    loadPreferences()
+    local status=Tabs.Settings:AddParagraph({Title="Native UI health",Content="Static interface setup complete; Roblox runtime is not verified."})
+    Tabs.Settings:AddButton({
+        Title="Check UI Registration",Description="Count native tabs and controls without enabling any feature.",ButtonText="CHECK",
+        Callback=function()
+            local count,optionCount=0,0
+            for _ in pairs(toggles) do count+=1 end
+            for _ in pairs(controls) do optionCount+=1 end
+            status:SetDesc(string.format("%d tabs | %d toggles | %d settings | Native monochrome",#Window.Tabs,count,optionCount))
+        end
+    })
+end
+Window:SelectTab(1)
+Native:Notify({Title="XandMe Native",Content="Right Ctrl: menu. All features start OFF.",Duration=4})
 
 local function estimateNextKiller()
     local candidates=Players:GetPlayers()
@@ -2164,7 +2347,13 @@ connect(RunService.Heartbeat,function()
         state.visibleHighlights,state.maxWorldHighlights,state.fps))
     skillStatus:SetDesc(skill)
     inputStatus:SetDesc(state.inputStatus)
+    if state.moonwalk then
+        local left=UserInputService:IsKeyDown(Enum.KeyCode.A)
+        local right=UserInputService:IsKeyDown(Enum.KeyCode.D)
+        state.moonwalkStatus="Manual practice | A: "..(left and "DOWN" or "up").." | D: "..(right and "DOWN" or "up")
+    end
     moonwalkStatusBox:SetDesc(state.moonwalkStatus)
+    cameraStatusBox:SetDesc(cameraController.status())
     local hum=char and char:FindFirstChildOfClass("Humanoid")
     local velocity=root and root:IsA("BasePart") and root.AssemblyLinearVelocity or Vector3.zero
     local horizontal=Vector3.new(velocity.X,0,velocity.Z).Magnitude
@@ -2174,57 +2363,7 @@ connect(RunService.Heartbeat,function()
     movementDiagnostics:SetDesc(string.format("FPS: %d | Network: %s\nNative WalkSpeed: %.1f | Horizontal velocity: %.1f studs/s\nNo movement override is applied by NoClip or Speed Assist.",state.fps,pingText,hum and hum.WalkSpeed or 0,horizontal))
 end)
 
--- Keep experimental auto input isolated from ESP and do not infer success
--- from a pcall that merely attempted to send an event.
-local tried=false
-local touchId=10421
-connect(RunService.Heartbeat,function()
-    if not state.alive or not state.autoSkillCheck then
-        tried=false;return
-    end
-    if not player.Team or player.Team.Name~="Survivors" then return end
-    local prompt=playerGui:FindFirstChild("SkillCheckPromptGui")
-    local check=prompt and prompt:FindFirstChild("Check")
-    if not check or not check:IsA("GuiObject") or not check.Visible then
-        tried=false;return
-    end
-    if tried then return end
-    local line=check:FindFirstChild("Line")
-    local goal=check:FindFirstChild("Goal")
-    if not line or not goal or not line:IsA("GuiObject")
-        or not goal:IsA("GuiObject") then
-        state.inputStatus="Line or Goal GUI not found";return
-    end
-    local current=line.Rotation%360
-    local ss=(goal.Rotation+101)%360
-    local se=(goal.Rotation+115)%360
-    if not ((ss>se and (current>=ss or current<=se))
-        or (current>=ss and current<=se)) then return end
-    tried=true
-    local action:Instance?=playerGui
-    for segment in string.gmatch("Survivor-mob.Controls.action.check","[^%.]+") do
-        action=action and action:FindFirstChild(segment) or nil
-    end
-    if not action or not action:IsA("GuiObject") then
-        state.inputStatus="Mobile action button missing";return
-    end
-    local ok,err=pcall(function()
-        local input=game:GetService("VirtualInputManager")
-        local inset=game:GetService("GuiService"):GetGuiInset()
-        local p=action.AbsolutePosition
-        local sz=action.AbsoluteSize
-        local x=p.X+sz.X/2+inset.X
-        local y=p.Y+sz.Y/2+inset.Y
-        input:SendTouchEvent(touchId,0,x,y)
-        task.delay(.04,function()
-            if state.alive then
-                pcall(function() input:SendTouchEvent(touchId,2,x,y) end)
-            end
-        end)
-    end)
-    state.inputStatus=ok and "Touch sent (not confirmed by game)" or
-        ("Input unavailable: "..tostring(err):sub(1,95))
-end)
+-- No automated gameplay input in this version.
 connect(Players.PlayerRemoving,function(leaving)
     removePlayerVisual(leaving)
     roleCache[leaving]=nil
@@ -2269,11 +2408,11 @@ local function cleanup()
     attempt("camera",cameraController.shutdown)
     attempt("cursor",stopCursor)
     attempt("overlay",function() gui:Destroy() end)
-    attempt("interface",function() Fluent:Destroy() end)
+    attempt("interface",function() Native:Destroy() end)
     if environment.VelionVDCleanup==cleanup then
         environment.VelionVDCleanup=nil
     end
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V4.8] Local UI diagnostics and isolated cleanup; runtime not tested.")
+print("[XandMe V5.0] Native monochrome interface; Roblox runtime not tested.")
