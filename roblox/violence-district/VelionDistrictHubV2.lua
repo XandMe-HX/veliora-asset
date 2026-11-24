@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V5.3.7 - ORIGINAL USER CONTROLLERS
+    VELION DISTRICT HUB V5.3.8 - ORIGINAL MOONWALK
     For Roblox Violence District - client-side utility module.
     Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -36,7 +36,7 @@ local state = {
     customFov=false, fovSmoothness=10,fovTurnBoost=5,fovStep=3,fovHotkeys=false,
     smoothCamera=false, cameraTurnTime=0.08,
     smoothZoom=false, cameraZoomTime=0.18,
-    moonwalk=false, moonwalkSteer=.28,
+    moonwalk=false, moonwalkResponsiveness=28, moonwalkMaxTorque=50000, moonwalkWiggleSpeed=48, moonwalkWiggleAngle=18,
     moonwalkStatus="OFF | assign a shortcut in Settings",
     killerAlert=false, offscreenESP=false, hidden=false, scanProgress="Disabled",
     expanded=true, activeTab="Home", sceneBlur=false,
@@ -292,7 +292,7 @@ local Native,Window=(function()
     local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0,Active=true})
     local brand=text(header,"XandMe.",26,true)
     brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-144,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
-    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3.7",10,false,C.muted)
+    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3.8",10,false,C.muted)
     subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-144,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
     local minimize=btn(header,"−",34,30)
     minimize.AnchorPoint=Vector2.new(1,.5);minimize.Position=UDim2.new(1,-78,.5,0)
@@ -1738,124 +1738,119 @@ end
 
 
 -- User-supplied AlignOrientation moonwalk, integrated with hub lifecycle.
--- Developer-authorized movement testing only.
+-- Original input, orientation, fallback and wave logic. Only lifecycle/settings wrappers.
 local setMoonwalk=(function()
-    local TURN_RESPONSIVENESS=28
-    local MAX_TORQUE=50000
-    local WIGGLE_SPEED=48
-    local WIGGLE_ANGLE=18
-    local renderName="VD_CleanMoonwalkWiggle_"..player.UserId
-    local bound=false
-    local controlledHumanoid: Humanoid?=nil
-    local controlledRoot: BasePart?=nil
-    local attachment: Attachment?=nil
-    local align: AlignOrientation?=nil
-    local originalAutoRotate: boolean?=nil
-    local wiggleTimer=0
-    local function authorized(): boolean
-        return RunService:IsStudio() or Workspace:GetAttribute("VelionAllowMoonwalk")==true
-    end
-    local function release()
-        wiggleTimer=0
-        if align and align.Parent then align.MaxTorque=0;align.Enabled=false end
-        local hum=controlledHumanoid
-        local original=originalAutoRotate
-        originalAutoRotate=nil
-        if hum and hum.Parent and original~=nil then
-            local ok,err=pcall(function() hum.AutoRotate=original end)
-            if not ok then runtimeLog.record("moonwalk restore",err) end
-        end
-    end
+    local renderName = "VD_CleanMoonwalkWiggle"
+    local bound = false
+    local character: Model? = nil
+    local humanoidRef: Humanoid? = nil
+    local rootRef: BasePart? = nil
+    local attachment: Attachment? = nil
+    local alignOrientation: AlignOrientation? = nil
+    local wiggleTimer = 0
     local function destroyRig()
-        release()
-        if align then align:Destroy();align=nil end
+        if humanoidRef and humanoidRef.Parent then humanoidRef.AutoRotate = true end
+        if alignOrientation then alignOrientation:Destroy();alignOrientation=nil end
         if attachment then attachment:Destroy();attachment=nil end
-        controlledHumanoid=nil
-        controlledRoot=nil
+        character=nil;humanoidRef=nil;rootRef=nil;wiggleTimer=0
     end
-    local function setup(hum: Humanoid,root: BasePart)
-        if controlledHumanoid==hum and controlledRoot==root and align and align.Parent==root
-            and attachment and attachment.Parent==root then return end
+    local function setupMoonwalk(char: Model, humanoid: Humanoid, root: BasePart)
         destroyRig()
-        controlledHumanoid=hum
-        controlledRoot=root
-        local att=Instance.new("Attachment")
-        att.Name="MoonwalkAttachment"
-        att.Parent=root
+        character=char
+        humanoidRef=humanoid
+        rootRef=root
+        local att = Instance.new("Attachment")
+        att.Name = "MoonwalkAttachment"
+        att.Parent = root
         attachment=att
-        local orientation=Instance.new("AlignOrientation")
-        orientation.Name="VelionMoonwalkOrientation"
-        orientation.Mode=Enum.OrientationAlignmentMode.OneAttachment
-        orientation.Attachment0=att
-        orientation.RigidityEnabled=false
-        orientation.Responsiveness=TURN_RESPONSIVENESS
-        orientation.MaxTorque=0
-        orientation.Enabled=false
-        orientation.Parent=root
-        align=orientation
+        local orientation = Instance.new("AlignOrientation")
+        orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+        orientation.Attachment0 = att
+        orientation.RigidityEnabled = false
+        orientation.Responsiveness = state.moonwalkResponsiveness
+        orientation.MaxTorque = 0
+        orientation.Parent = root
+        alignOrientation=orientation
+        wiggleTimer=0
     end
     local function update(dt: number)
-        if not state.alive or not state.moonwalk then destroyRig();return end
-        if not authorized() then destroyRig();state.moonwalkStatus="LOCKED | developer movement test only";return end
+        if not state.alive or not state.moonwalk then return end
         local char=player.Character
-        local hum=char and char:FindFirstChildOfClass("Humanoid")
-        local root=hum and hum.RootPart
-        if not hum or hum.Health<=0 or not root or not root:IsDescendantOf(Workspace) then
-            destroyRig();state.moonwalkStatus="WAITING | character";return
+        local humanoid=char and char:FindFirstChildOfClass("Humanoid")
+        local root=char and char:FindFirstChild("HumanoidRootPart")
+        if not char or not char.Parent or not humanoid or humanoid.Health<=0 or not root or not root:IsA("BasePart") then
+            if character then destroyRig() end
+            state.moonwalkStatus="WAITING | character"
+            return
         end
-        if controlledRoot and (controlledRoot~=root or controlledHumanoid~=hum) then destroyRig() end
-        if UserInputService:GetFocusedTextBox() or hum.Sit or hum.PlatformStand or root.Anchored then
-            release();state.moonwalkStatus="READY | input or character unavailable";return
+        if character~=char or humanoidRef~=humanoid or rootRef~=root or not alignOrientation or not alignOrientation.Parent or not attachment or not attachment.Parent then
+            setupMoonwalk(char,humanoid,root)
         end
-        local w=UserInputService:IsKeyDown(Enum.KeyCode.W)
-        local s=UserInputService:IsKeyDown(Enum.KeyCode.S)
-        local a=UserInputService:IsKeyDown(Enum.KeyCode.A)
-        local d=UserInputService:IsKeyDown(Enum.KeyCode.D)
-        local onlyS=s and not w
-        local bothAD=a and d
-        if not onlyS and not bothAD then
-            release();state.moonwalkStatus="READY | hold S or A+D";return
-        end
-        local camera=Workspace.CurrentCamera
-        if not camera then release();state.moonwalkStatus="WAITING | camera";return end
-        local look=camera.CFrame.LookVector
-        local flat=Vector3.new(look.X,0,look.Z)
-        if flat.Magnitude<.001 then release();state.moonwalkStatus="WAITING | horizontal camera direction";return end
-        local flatCamLook=flat.Unit
-        setup(hum,root)
-        local orientation=align
-        if not orientation then return end
-        if originalAutoRotate==nil then originalAutoRotate=hum.AutoRotate end
-        hum.AutoRotate=false
-        orientation.MaxTorque=MAX_TORQUE
-        orientation.Enabled=true
-        if bothAD and not s and not w then
-            hum:Move(-flatCamLook,false)
-        end
-        local moveDir=hum.MoveDirection
-        local horizontal=Vector3.new(moveDir.X,0,moveDir.Z)
-        local baseReverseDir=horizontal.Magnitude>.05 and -horizontal.Unit or flatCamLook
-        local targetCFrame=CFrame.lookAt(Vector3.zero,baseReverseDir)
-        if bothAD then
-            wiggleTimer=(wiggleTimer+math.clamp(dt,0,.1)*WIGGLE_SPEED)% (20*math.pi)
-            local wave=math.sin(wiggleTimer)+(math.sin(wiggleTimer*2.1)*.2)
-            local yawOffset=math.rad(wave*WIGGLE_ANGLE)
-            targetCFrame=targetCFrame*CFrame.Angles(0,yawOffset,0)
+        local alignOrientation=alignOrientation
+        if not alignOrientation or not workspace.CurrentCamera then return end
+        local TURN_RESPONSIVENESS = state.moonwalkResponsiveness
+        local MAX_TORQUE = state.moonwalkMaxTorque
+        local WIGGLE_SPEED = state.moonwalkWiggleSpeed
+        local WIGGLE_ANGLE = state.moonwalkWiggleAngle
+        alignOrientation.Responsiveness = TURN_RESPONSIVENESS
+
+        local w = UserInputService:IsKeyDown(Enum.KeyCode.W)
+        local s = UserInputService:IsKeyDown(Enum.KeyCode.S)
+        local a = UserInputService:IsKeyDown(Enum.KeyCode.A)
+        local d = UserInputService:IsKeyDown(Enum.KeyCode.D)
+
+        local onlyS = s and not w
+        local bothAD = a and d
+        local camLook = workspace.CurrentCamera.CFrame.LookVector
+        local flatCamLook = Vector3.new(camLook.X, 0, camLook.Z).Unit
+
+        if onlyS or bothAD then
+            humanoid.AutoRotate = false
+            alignOrientation.MaxTorque = MAX_TORQUE
+
+            -- Jika menahan A+D tanpa S, otomatis bantu dorong mundur agar kaki tetap melangkah moonwalk
+            if bothAD and not s and not w then
+                humanoid:Move(-flatCamLook, false)
+            end
+
+            -- Arah dasar membelakangi kamera/gerakan
+            local moveDir = humanoid.MoveDirection
+            local baseReverseDir
+            if moveDir.Magnitude > 0.05 then
+                baseReverseDir = Vector3.new(-moveDir.X, 0, -moveDir.Z).Unit
+            else
+                baseReverseDir = -flatCamLook
+            end
+
+            local targetCFrame = CFrame.lookAt(Vector3.zero, baseReverseDir)
+
+            -- Efek getaran bahu (hanya sumbu Y agar kaki tetap rata di tanah)
+            if bothAD then
+                wiggleTimer = wiggleTimer + (dt * WIGGLE_SPEED)
+                local wave = math.sin(wiggleTimer) + (math.sin(wiggleTimer * 2.1) * 0.2)
+                local yawOffset = math.rad(wave * WIGGLE_ANGLE)
+
+                targetCFrame = targetCFrame * CFrame.Angles(0, yawOffset, 0)
+            else
+                wiggleTimer = 0
+            end
+
+            alignOrientation.CFrame = targetCFrame
         else
-            wiggleTimer=0
+            wiggleTimer = 0
+            alignOrientation.MaxTorque = 0
+            humanoid.AutoRotate = true
         end
-        orientation.CFrame=targetCFrame
-        state.moonwalkStatus=bothAD and "ACTIVE | A+D wiggle" or "ACTIVE | S reverse"
+        state.moonwalkStatus=bothAD and "ACTIVE | A+D wiggle" or onlyS and "ACTIVE | S reverse" or "READY | hold S or A+D"
     end
     return function(enabled: boolean)
         state.moonwalk=enabled and state.alive
         if state.moonwalk then
-            state.moonwalkStatus=authorized() and "READY | hold S or A+D" or "LOCKED | developer movement test only"
+            state.moonwalkStatus="READY | hold S or A+D"
             if not bound then
-                RunService:BindToRenderStep(renderName,Enum.RenderPriority.Character.Value+10,function(dt)
+                RunService:BindToRenderStep(renderName, Enum.RenderPriority.Character.Value + 10, function(dt)
                     local ok,err=pcall(update,dt)
                     if not ok then
-                        destroyRig()
                         state.moonwalkStatus="ERROR | see runtime diagnostics"
                         runtimeLog.record("moonwalk",err)
                     end
@@ -1865,7 +1860,7 @@ local setMoonwalk=(function()
         else
             if bound then RunService:UnbindFromRenderStep(renderName);bound=false end
             destroyRig()
-            state.moonwalkStatus="OFF | native rotation restored"
+            state.moonwalkStatus="OFF | native rotation"
         end
     end
 end)()
@@ -2285,8 +2280,12 @@ Tabs.Movement:AddButton({
 })
 registerToggle(Tabs.Movement,
     "MoonwalkAD","Moonwalk DBD",
-    "Hold S for reverse movement, A+D for wiggle; developer test only.",
+    "Original user controller: hold S or A+D.",
     "moonwalk",setMoonwalk)
+registerSlider(Tabs.Movement,"MoonwalkResponsiveness","Turn Responsiveness","Original default: 28.",state.moonwalkResponsiveness,5,100,0,function(v) state.moonwalkResponsiveness=v end)
+registerSlider(Tabs.Movement,"MoonwalkMaxTorque","Max Torque","Original default: 50000.",state.moonwalkMaxTorque,0,100000,0,function(v) state.moonwalkMaxTorque=v end)
+registerSlider(Tabs.Movement,"MoonwalkWiggleSpeed","Wiggle Speed","Original default: 48.",state.moonwalkWiggleSpeed,0,100,0,function(v) state.moonwalkWiggleSpeed=v end)
+registerSlider(Tabs.Movement,"MoonwalkWiggleAngle","Wiggle Angle","Original default: 18 degrees.",state.moonwalkWiggleAngle,0,90,0,function(v) state.moonwalkWiggleAngle=v end)
 local moonwalkStatusBox=Tabs.Movement:AddParagraph({
     Title="MOONWALK STATUS",Content="OFF | native rotation"
 })
@@ -2970,4 +2969,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V5.3.7] Original user controllers integrated; Roblox runtime not tested.")
+print("[XandMe V5.3.8] Original moonwalk body with controls; Roblox runtime not tested.")
