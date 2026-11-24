@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V4.3 - OPTIONAL MOONWALK A/D
+    VELION DISTRICT HUB V4.4 - CAMERA UPDATE
     For Roblox Violence District - client-side utility module.
     Game UI uses upstream Fluent; the World ESP engine is local code.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -33,6 +33,7 @@ local state = {
     alive=true, playerESP=true, objectiveESP=true,
     fullbright=false, noFog=false, noClip=false,
     speed=false, speedValue=24, fov=70,
+    customFov=false, fovMode="Preserve Dynamic", fovSmooth=0.18,
     moonwalk=false, moonwalkSteer=.28,
     moonwalkStatus="OFF (enable in Movement or press M)",
     killerAlert=true, offscreenESP=true, hidden=false, scanProgress="Starting",
@@ -195,7 +196,7 @@ local uiHeight=math.min(490,math.max(320,cameraSize.Y-80))
 local createdWindow,Window=pcall(function()
     return Fluent:CreateWindow({
         Title="VELION | VIOLENCE DISTRICT",
-        SubTitle="V4.3 / Moonwalk Assist",
+        SubTitle="V4.4 / Camera Update",
         TabWidth=cameraSize.X<500 and 116 or 150,
         Size=UDim2.fromOffset(uiWidth,uiHeight),
         Acrylic=true,Theme="Dark",
@@ -299,7 +300,6 @@ local playerVisuals={}
 local objectiveVisuals={}
 local originalsCollision=setmetatable({}, {__mode="k"})
 local originalWalkSpeed=setmetatable({}, {__mode="k"})
-local originalFOV=Workspace.CurrentCamera and Workspace.CurrentCamera.FieldOfView or 70
 local function gameValue(object,name)
     if not object then return nil end
     local value=object:GetAttribute(name)
@@ -1013,10 +1013,70 @@ local function updateSpeed()
         end
     end
 end
-local function cameraFov()
-    local camera=Workspace.CurrentCamera
-    if camera then camera.FieldOfView=state.fov end
-end
+-- Optional local lens controller. Keep native camera position, collision and input.
+-- Preserve Dynamic estimates the native FOV offset; actual sprint behavior is not verified.
+local cameraController=(function()
+    local binding="VelionCameraLens_"..tostring(player.UserId)
+    local tracked: Camera?=nil
+    local reference=70
+    local native=70
+    local applied: number?=nil
+    local filtered=70
+    local bound=false
+    local function restore()
+        if tracked and applied~=nil and math.abs(tracked.FieldOfView-applied)<0.02 then
+            tracked.FieldOfView=native
+        end
+        tracked=nil
+        applied=nil
+    end
+    local function step(dt: number)
+        if not state.alive or not state.customFov then return end
+        local cam=Workspace.CurrentCamera
+        if tracked~=cam then
+            restore()
+            if not cam then return end
+            tracked=cam
+            reference=cam.FieldOfView
+            native=reference
+            filtered=reference
+        end
+        if not cam then return end
+        -- Respect scripted cinematics; resume from a new native baseline afterwards.
+        if cam.CameraType==Enum.CameraType.Scriptable then
+            restore()
+            return
+        end
+        local observed=cam.FieldOfView
+        if applied==nil or math.abs(observed-applied)>0.02 then
+            native=observed
+        end
+        local offset=state.fovMode=="Preserve Dynamic" and (native-reference) or 0
+        local target=math.clamp(state.fov+offset,1,120)
+        local alpha=state.fovSmooth<=0 and 1 or
+            (1-math.exp(-math.clamp(dt,0,0.25)/state.fovSmooth))
+        filtered=math.clamp(filtered+(target-filtered)*alpha,1,120)
+        if math.abs(target-filtered)<0.02 then filtered=target end
+        if math.abs(observed-filtered)>0.02 then
+            cam.FieldOfView=filtered
+            applied=cam.FieldOfView
+        end
+    end
+    local function setEnabled(enabled: boolean)
+        state.customFov=enabled
+        if enabled and not bound then
+            RunService:BindToRenderStep(binding,Enum.RenderPriority.Last.Value+1,step)
+            bound=true
+        elseif not enabled then
+            if bound then
+                RunService:UnbindFromRenderStep(binding)
+                bound=false
+            end
+            restore()
+        end
+    end
+    return {setEnabled=setEnabled}
+end)()
 local function setSpeed(value)
     state.speed=value
     if not value then
@@ -1365,10 +1425,49 @@ registerToggle(Tabs.Visual,"Fullbright","Fullbright",
 registerToggle(Tabs.Visual,"NoFog","Remove Fog",
     "Reduce atmosphere density and fog","noFog",
     function() updateLighting() end)
-registerSlider(Tabs.Visual,"CameraFov","Field of View",
-    "Camera FOV in degrees",
-    state.fov,60,110,0,
-    function(v) state.fov=v;cameraFov() end)
+Tabs.Visual:AddParagraph({
+    Title="CAMERA / LENS",
+    Content="Wide lens presets use 70-degree vertical FOV as the 1x reference. Native camera movement and wall collision stay unchanged."
+})
+registerToggle(Tabs.Visual,"CustomFov","Custom FOV",
+    "Optional local lens override; OFF restores native FOV.",
+    "customFov",cameraController.setEnabled)
+local fovSlider=registerSlider(Tabs.Visual,"CameraFov","Field of View",
+    "Vertical FOV in degrees (native maximum 120).",
+    state.fov,60,120,0,function(v) state.fov=v end)
+local lensPresets={["1.0x"]=1,["0.8x"]=0.8,["0.7x"]=0.7,["0.6x"]=0.6,["0.5x"]=0.5}
+-- Buttons avoid persisting a second, conflicting FOV source in SaveManager.
+for _,preset in ipairs({"1.0x","0.8x","0.7x","0.6x","0.5x"}) do
+    local factor=lensPresets[preset]
+    local degrees=math.floor(math.deg(2*math.atan(math.tan(math.rad(35))/factor))+0.5)
+    Tabs.Visual:AddButton({
+        Title="Lens "..preset.." / "..tostring(degrees).." deg",
+        Description="Set target FOV; enable Custom FOV to apply.",
+        Callback=function()
+            state.fov=degrees
+            fovSlider:SetValue(degrees)
+        end
+    })
+end
+controls.FovMode=Tabs.Visual:AddDropdown("FovMode",{
+    Title="FOV Behavior",
+    Values={"Preserve Dynamic","Fixed"},Default="Preserve Dynamic",
+    Description="Preserve observed native FOV changes or keep a fixed target.",
+    Callback=function(v)
+        if v=="Preserve Dynamic" or v=="Fixed" then state.fovMode=v end
+    end
+})
+registerSlider(Tabs.Visual,"FovSmooth","FOV Smoothing",
+    "Exponential transition time constant in seconds; 0 = instant.",
+    state.fovSmooth,0,0.6,2,function(v) state.fovSmooth=v end)
+Tabs.Visual:AddButton({
+    Title="Reset Camera Lens",
+    Description="Restore 70-degree target and disable custom lens.",
+    Callback=function()
+        fovSlider:SetValue(70)
+        toggles.CustomFov:SetValue(false)
+    end
+})
 
 -- Fluent owns the menu layout, theme picker and acrylic rendering.
 local defMode=player:GetAttribute("GlassMode")
@@ -1502,7 +1601,7 @@ uiStatus:SetDesc(runUISelfCheck())
 pcall(function() Window:SelectTab(1) end)
 pcall(function()
     Fluent:Notify({
-        Title="Velion District V4.2",
+        Title="Velion District V4.4",
         Content="Fluent UI loaded. See Settings for diagnostic status.",
         Duration=5
     })
@@ -1705,9 +1804,6 @@ connect(Lighting.ChildAdded,function()
         task.defer(updateLighting)
     end
 end)
-connect(Workspace:GetPropertyChangedSignal("CurrentCamera"),function()
-    if state.alive then cameraFov() end
-end)
 
 local function cleanup()
     if not state.alive then return end
@@ -1730,8 +1826,7 @@ local function cleanup()
     state.noFog=false
     updateLighting()
     if state.speed then setSpeed(false) end
-    local camera=Workspace.CurrentCamera
-    if camera then camera.FieldOfView=originalFOV end
+    cameraController.setEnabled(false)
     gui:Destroy()
     pcall(function() Fluent:Destroy() end)
     if environment.VelionVDCleanup==cleanup then
@@ -1740,4 +1835,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 startObjectiveScan()
-print("[Velion District V4.3] Fluent + optional Moonwalk A/D added; Roblox runtime not tested.")
+print("[Velion District V4.4] Optional camera lens presets and smoothing; Roblox runtime not tested.")
