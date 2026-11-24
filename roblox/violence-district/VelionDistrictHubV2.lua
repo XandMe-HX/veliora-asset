@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V5.2 - NATIVE CONTROL FIXES
+    VELION DISTRICT HUB V5.3 - CAMERA STATUS DIAGNOSTICS
     For Roblox Violence District - client-side utility module.
     Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -290,7 +290,7 @@ local Native,Window=(function()
     local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0,Active=true})
     local brand=text(header,"XandMe.",26,true)
     brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-120,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
-    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.2",10,false,C.muted)
+    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3",10,false,C.muted)
     subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-120,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
     local close=btn(header,"−",34,30)
     close.AnchorPoint=Vector2.new(1,.5);close.Position=UDim2.new(1,-12,.5,0)
@@ -1609,13 +1609,19 @@ local cameraController=(function()
         setEnabled(false)
     end
     local function status()
+        -- Read-only diagnostics. Do not change camera ownership or eligibility.
         local cam=Workspace.CurrentCamera
-        if not cam then return "No active camera." end
-        local actual=cam.FieldOfView
-        local info=string.format("Actual: %.1f° | target: %.1f° | type: %s",actual,state.fov,cam.CameraType.Name)
-        if not state.customFov then return info.."\nCustom FOV is OFF." end
-        if not eligible(cam) then return info.."\nNative controller unavailable for this camera. No override." end
-        return info.."\nCustom FOV requested; game compatibility is unverified."
+        if not cam then return "No active camera. Waiting for the experience." end
+        local function onOff(value) return value and "ON" or "OFF" end
+        local info=string.format("Actual FOV: %.1f° | configured: %.1f° | type: %s",cam.FieldOfView,state.fov,cam.CameraType.Name)
+        info=info.."\nFOV: "..onOff(state.customFov).." | rotation: "..onOff(state.smoothCamera).." | zoom: "..onOff(state.smoothZoom)
+        if not state.customFov and not state.smoothCamera and not state.smoothZoom then
+            return info.."\nAll camera options OFF. Native camera is unchanged."
+        end
+        if not eligible(cam) then
+            return info.."\nNative camera unavailable for these options. Experience camera is respected."
+        end
+        return info.."\nOptions requested. Runtime behavior has not been verified."
     end
     return {setEnabled=setEnabled,refreshPose=refreshPose,shutdown=shutdown,nativeFreeLookInfo=nativeFreeLookInfo,status=status}
 end)()
@@ -1641,7 +1647,7 @@ end
 -- Manual input practice: never writes Humanoid.Move, AutoRotate, or root CFrame.
 local function setMoonwalk(enabled: boolean)
     state.moonwalk=enabled
-    state.moonwalkStatus=enabled and "Practice ON | use native W/A/S/D controls" or "Practice OFF"
+    state.moonwalkStatus=enabled and "Manual input monitor only; does not animate the character." or "Practice OFF"
 end
 
 -- =========================================
@@ -2217,6 +2223,13 @@ connect(RunService.Heartbeat,function()
     runtimeLog.lastUpdate=now
     local ok,err=pcall(refreshDiagnostics)
     if not ok then runtimeLog.record("diagnostic display",err) end
+    local okCamera,cameraText=pcall(cameraController.status)
+    if not okCamera then
+        runtimeLog.record("camera status",cameraText)
+        cameraText="Camera status unavailable. See Runtime Diagnostics."
+    end
+    local okDisplay,displayErr=pcall(function() cameraStatusBox:SetDesc(cameraText) end)
+    if not okDisplay then runtimeLog.record("camera status display",displayErr) end
 end)
 -- Use the real logo when the owner supplies a published Roblox image asset ID.
 -- A typographic fallback is intentional; no fabricated asset ID.
@@ -2450,10 +2463,9 @@ connect(RunService.Heartbeat,function()
     if state.moonwalk then
         local left=UserInputService:IsKeyDown(Enum.KeyCode.A)
         local right=UserInputService:IsKeyDown(Enum.KeyCode.D)
-        state.moonwalkStatus="Manual practice | A: "..(left and "DOWN" or "up").." | D: "..(right and "DOWN" or "up")
+        state.moonwalkStatus="Manual input monitor only (no animation) | A: "..(left and "DOWN" or "up").." | D: "..(right and "DOWN" or "up")
     end
     moonwalkStatusBox:SetDesc(state.moonwalkStatus)
-    cameraStatusBox:SetDesc(cameraController.status())
     local hum=char and char:FindFirstChildOfClass("Humanoid")
     local velocity=root and root:IsA("BasePart") and root.AssemblyLinearVelocity or Vector3.zero
     local horizontal=Vector3.new(velocity.X,0,velocity.Z).Magnitude
@@ -2515,4 +2527,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V5.2] Native control layout and color validation; Roblox runtime not tested.")
+print("[XandMe V5.3] Read-only camera diagnostics; Roblox runtime not tested.")
