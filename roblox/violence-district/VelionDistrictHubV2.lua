@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V4.5 - CAMERA COMFORT
+    VELION DISTRICT HUB V4.6 - XANDME MONOCHROME
     For Roblox Violence District - client-side utility module.
     Game UI uses upstream Fluent; the World ESP engine is local code.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -30,25 +30,25 @@ for _,name in ipairs({"VelionDistrictHub","VelionDistrictHubV2"}) do
 end
 
 local state = {
-    alive=true, playerESP=true, objectiveESP=true,
+    alive=true, playerESP=false, objectiveESP=false,
     fullbright=false, noFog=false, noClip=false,
     speed=false, speedValue=24, fov=70,
     customFov=false, fovMode="Preserve Dynamic", fovSmooth=0.18,
     smoothCamera=false, cameraTurnTime=0.08,
     smoothZoom=false, cameraZoomTime=0.18,
     moonwalk=false, moonwalkSteer=.28,
-    moonwalkStatus="OFF (enable in Movement or press M)",
-    killerAlert=true, offscreenESP=true, hidden=false, scanProgress="Starting",
+    moonwalkStatus="OFF | assign a shortcut in Settings",
+    killerAlert=false, offscreenESP=false, hidden=false, scanProgress="Disabled",
     expanded=true, activeTab="Home", sceneBlur=false,
-    killerESP=true, survivorESP=true, unknownESP=false,
-    survivorItemsESP=true, worldItemsESP=true,
-    abilityNotify=true, roleTracking=true,
-    playerNames=true, playerDistance=true,
-    playerMask=true, chaseStatus=true, knockedStatus=true, hookedStatus=true,
-    playerHighlight=true, objectHighlight=true, highlightMode="Outline", nextKiller=true, skillMonitor=true,
+    killerESP=false, survivorESP=false, unknownESP=false,
+    survivorItemsESP=false, worldItemsESP=false,
+    abilityNotify=false, roleTracking=false,
+    playerNames=false, playerDistance=false,
+    playerMask=false, chaseStatus=false, knockedStatus=false, hookedStatus=false,
+    playerHighlight=false, objectHighlight=false, highlightMode="Outline", nextKiller=false, skillMonitor=false,
     autoSkillCheck=false, inputStatus="No action attempted",
-    generatorESP=true, palletESP=true, windowESP=true, hookESP=true,
-    gateESP=true, generatorProgressESP=true, espDistance=650,
+    generatorESP=false, palletESP=false, windowESP=false, hookESP=false,
+    gateESP=false, generatorProgressESP=false, espDistance=650,
     identifiedObjectives=0, unknownRoles=0,
     progressScale="Auto", progressUnknown=0,
     worldItemsFound=0, scanMapCount=0, scanInteractableCount=0,
@@ -57,7 +57,7 @@ local state = {
     abilitySignalsObserved=0, abilityNotificationCount=0,
     lastRoleTransition="None detected",
     roleTransitions=0, trackedPlayers=0,
-    maxWorldLabels=22, maxWorldHighlights=20, objectLabels=true,
+    maxWorldLabels=22, maxWorldHighlights=20, objectLabels=false,
     scanCandidates=0, scanScanned=0, scanDurationMs=0,
     visibleLabels=0, visibleHighlights=0, fps=60,
     highlightBudgetAvailable=20,
@@ -197,11 +197,11 @@ local uiWidth=math.min(600,math.max(310,cameraSize.X-24))
 local uiHeight=math.min(490,math.max(320,cameraSize.Y-80))
 local createdWindow,Window=pcall(function()
     return Fluent:CreateWindow({
-        Title="VELION | VIOLENCE DISTRICT",
-        SubTitle="V4.5 / Camera Comfort",
+        Title="XandMe.",
+        SubTitle="Velion District / Monochrome",
         TabWidth=cameraSize.X<500 and 116 or 150,
         Size=UDim2.fromOffset(uiWidth,uiHeight),
-        Acrylic=true,Theme="Dark",
+        Acrylic=false,Theme="Darker",
         MinimizeKey=Enum.KeyCode.RightControl
     })
 end)
@@ -224,6 +224,8 @@ local Tabs={
 local Options=Fluent.Options
 local controls={}
 local toggles={}
+local toggleTitles={}
+local toggleOrder={}
 local function registerToggle(tab:any,id:string,title:string,description:string,
     stateKey:string,onValue:((boolean)->())?)
     local obj=tab:AddToggle(id,{
@@ -235,6 +237,8 @@ local function registerToggle(tab:any,id:string,title:string,description:string,
         end
     })
     toggles[id]=obj
+    toggleTitles[id]=title
+    toggleOrder[#toggleOrder+1]=id
     return obj
 end
 local function registerColor(tab:any,id:string,label:string,colorKey:string)
@@ -913,6 +917,7 @@ local function stopSourceWatchers()
     table.clear(sourceConnections)
 end
 local function startObjectiveScan()
+    if not state.objectiveESP then return end
     scanGeneration+=1
     local token=scanGeneration
     stopSourceWatchers()
@@ -1238,7 +1243,7 @@ local function moonwalkStep(deltaTime: number)
     local right=UserInputService:IsKeyDown(Enum.KeyCode.D)
     if not left and not right then
         restoreMoonwalkRotation()
-        state.moonwalkStatus="ON | hold A/D to moonwalk; M toggles"
+        state.moonwalkStatus="ON | hold A/D to moonwalk"
         return
     end
     if moonwalkCharacterHumanoid~=humanoid then
@@ -1277,7 +1282,7 @@ local function setMoonwalk(enabled: boolean)
         end)
         if ok then
             moonwalkBound=true
-            state.moonwalkStatus="ON | hold A/D; press M to toggle"
+            state.moonwalkStatus="ON | hold A/D"
         else
             state.moonwalk=false
             state.moonwalkStatus="Bind failed: "..tostring(err):sub(1,75)
@@ -1320,7 +1325,16 @@ registerToggle(Tabs.Main,"PlayerESPMaster","Player ESP Master",
     end)
 registerToggle(Tabs.Main,"ObjectESPMaster","Object ESP Master",
     "Show map object highlights and labels","objectiveESP",
-    function() refreshObjectiveVisibility() end)
+    function(value)
+        if value then startObjectiveScan()
+        else
+            scanGeneration+=1
+            stopSourceWatchers()
+            clearObjectives()
+            state.scanProgress="Disabled"
+        end
+        refreshObjectiveVisibility()
+    end)
 
 -- Player ESP: each category has a separate ON/OFF.
 registerToggle(Tabs.Players,"KillerESP","Killer ESP",
@@ -1489,37 +1503,31 @@ local skillStatus=Tabs.Survivor:AddParagraph({
     Title="SKILL CHECK STATUS",Content="Reading..."
 })
 
-registerToggle(Tabs.Movement,"NoClip","NoClip",
-    "Local collision override","noClip",
-    function(v) setNoClip(v) end)
-registerToggle(Tabs.Movement,"SpeedAssist","Speed Assist",
-    "Maintain the requested WalkSpeed","speed",
-    function(v) setSpeed(v) end)
-registerSlider(Tabs.Movement,"SpeedValue","WalkSpeed",
-    "Local Humanoid WalkSpeed (game may override)",
-    state.speedValue,16,60,0,
-    function(v) state.speedValue=v end)
+local movementDiagnostics=Tabs.Movement:AddParagraph({
+    Title="MOVEMENT DIAGNOSTICS",
+    Content="Native movement retained. NoClip and forced WalkSpeed are disabled in this build."
+})
+Tabs.Movement:AddButton({
+    Title="Reset Movement",
+    Description="Disable local movement assists and restore their original settings.",
+    Callback=function()
+        setNoClip(false)
+        setSpeed(false)
+        if toggles.MoonwalkAD then toggles.MoonwalkAD:SetValue(false) end
+    end
+})
 local moonwalkToggle=registerToggle(Tabs.Movement,
     "MoonwalkAD","Moonwalk A/D Assist",
-    "ON: hold A/D to steer forward while facing the camera. M toggles.",
+    "ON: hold A/D to steer forward while facing the camera",
     "moonwalk",setMoonwalk)
 registerSlider(Tabs.Movement,"MoonwalkSteer","Moonwalk Steering",
     "Side steering strength while holding A or D",
     state.moonwalkSteer,.1,.65,2,
     function(value) state.moonwalkSteer=value end)
 local moonwalkStatusBox=Tabs.Movement:AddParagraph({
-    Title="MOONWALK STATUS",Content="OFF | press M or enable toggle"
+    Title="MOONWALK STATUS",Content="OFF | assign a shortcut or enable toggle"
 })
-connect(UserInputService.InputBegan,function(input,processed)
-    if not processed and not UserInputService:GetFocusedTextBox()
-        and input.KeyCode==Enum.KeyCode.M and state.alive then
-        if moonwalkToggle and type(moonwalkToggle.SetValue)=="function" then
-            moonwalkToggle:SetValue(not state.moonwalk)
-        else
-            setMoonwalk(not state.moonwalk)
-        end
-    end
-end)
+
 
 registerToggle(Tabs.Visual,"Fullbright","Fullbright",
     "Lighten environment locally","fullbright",
@@ -1593,46 +1601,178 @@ Tabs.Visual:AddButton({
     end
 })
 
--- Fluent owns the menu layout, theme picker and acrylic rendering.
-local defMode=player:GetAttribute("GlassMode")
-local glassMode=(typeof(defMode)=="string" and
-    (defMode=="Frosted" or defMode=="Clear" or defMode=="Blur"))
-    and defMode or "Frosted"
-local glassModeStatus="Not applied"
-local function applyGlassMode(value:string)
-    glassMode=value
-    player:SetAttribute("GlassMode",glassMode)
-    local ok,result=pcall(function()
-        if type(Fluent.ToggleAcrylic)~="function"
-            or type(Fluent.ToggleTransparency)~="function" then
-            error("Fluent theme toggles unavailable")
+-- Fixed dark theme and native menu shortcut. Gameplay preferences never auto-enable.
+local glassModeStatus="Darker / opaque base"
+Tabs.Settings:AddParagraph({
+    Title="XANDME / MONOCHROME",
+    Content="Right Ctrl opens and closes the menu. Every feature starts OFF. Shortcut assignments are independent of feature states."
+})
+local manualCursor=false
+local cursorModal=create("TextButton",Window.Root,{
+    Name="XandMeCursorModal",Text="",Size=UDim2.fromOffset(1,1),
+    Position=UDim2.fromOffset(0,0),BackgroundTransparency=1,
+    TextTransparency=1,AutoButtonColor=false,Modal=true,Visible=true
+})
+local cursorRelease=create("TextButton",gui,{
+    Name="XandMeManualCursor",Text="",Size=UDim2.fromOffset(1,1),
+    BackgroundTransparency=1,TextTransparency=1,AutoButtonColor=false,
+    Modal=true,Visible=false
+})
+local savedMouseBehavior=nil
+local savedMouseIcon=nil
+local function syncCursor()
+    local open=Window.Root.Parent~=nil and Window.Root.Visible
+    local release=state.alive and (open or manualCursor)
+    cursorModal.Visible=state.alive and open
+    cursorRelease.Visible=state.alive and manualCursor and not open
+    if release then
+        if savedMouseBehavior==nil then
+            savedMouseBehavior=UserInputService.MouseBehavior
+            savedMouseIcon=UserInputService.MouseIconEnabled
         end
-        if value=="Frosted" then
-            Fluent:ToggleAcrylic(true)
-            Fluent:ToggleTransparency(false)
-        elseif value=="Clear" then
-            Fluent:ToggleAcrylic(false)
-            Fluent:ToggleTransparency(true)
-        else -- Blur / One UI (approximate theme, not real per-panel blur)
-            Fluent:ToggleAcrylic(true)
-            Fluent:ToggleTransparency(true)
+        UserInputService.MouseBehavior=Enum.MouseBehavior.Default
+        UserInputService.MouseIconEnabled=true
+    elseif savedMouseBehavior~=nil then
+        if UserInputService.MouseBehavior==Enum.MouseBehavior.Default then
+            UserInputService.MouseBehavior=savedMouseBehavior
+        end
+        if UserInputService.MouseIconEnabled==true then UserInputService.MouseIconEnabled=savedMouseIcon end
+        savedMouseBehavior=nil
+        savedMouseIcon=nil
+    end
+end
+registerToggle(Tabs.Settings,"ReleaseCursor","Release Cursor Outside Menu",
+    "Uses Roblox modal UI; OFF returns control to the native camera.",
+    "manualCursor",function(v) manualCursor=v;syncCursor() end)
+local menuScale=create("UIScale",Window.Root,{Scale=1})
+local openTween=nil
+local captureId=nil
+local bindings={}
+local keyRows={}
+local HttpService=game:GetService("HttpService")
+local keyPath="VelionDistrict/xandme-keybinds.json"
+local canSave=type(isfolder)=="function" and type(makefolder)=="function" and type(writefile)=="function" and type(readfile)=="function" and type(isfile)=="function"
+local function keyAllowed(name)
+    if type(name)~="string" or name=="RightControl" or name=="Unknown" or name=="Escape" or name=="Backspace" or name=="Delete" then return false end
+    local ok,key=pcall(function() return Enum.KeyCode[name] end)
+    return ok and key~=nil and key~=Enum.KeyCode.Unknown
+end
+local function saveBindings()
+    if not canSave then return end
+    pcall(function()
+        if not isfolder("VelionDistrict") then makefolder("VelionDistrict") end
+        writefile(keyPath,HttpService:JSONEncode(bindings))
+    end)
+end
+local function refreshKeyRows()
+    for id,row in pairs(keyRows) do
+        row:SetDesc(captureId==id and "Press a key... Esc cancels / Backspace clears" or (bindings[id] or "Unbound"))
+    end
+end
+if canSave then
+    pcall(function()
+        if not isfile(keyPath) then return end
+        local data=HttpService:JSONDecode(readfile(keyPath))
+        if type(data)~="table" then return end
+        local used={}
+        for _,id in ipairs(toggleOrder) do
+            local name=data[id]
+            if keyAllowed(name) and not used[name] then bindings[id]=name;used[name]=true end
         end
     end)
-    glassModeStatus=ok and ("Fluent theme requested: "..value)
-        or ("GlassMode saved; style unavailable: "..tostring(result):sub(1,100))
 end
-local modeDropdown=Tabs.Settings:AddDropdown("GlassMode",{
-    Title="Glass Style",
-    Description="Frosted / Clear / Blur (applied to Fluent Acrylic)",
-    Values={"Frosted","Clear","Blur"},
-    Default=glassMode,
-    Callback=applyGlassMode
-})
-controls.GlassMode=modeDropdown
-Tabs.Settings:AddParagraph({
-    Title="RENDER LIMITS",
-    Content="Acrylic depends on executor/graphics settings. True per-element blur is not a Roblox property."
-})
+local keySection=Tabs.Settings:AddSection("Feature shortcuts")
+keySection:AddParagraph({Title="Press to bind",Content="Click any row and press a keyboard key (including Numpad). Esc cancels; Backspace/Delete clears. Right Ctrl is reserved."})
+for _,id in ipairs(toggleOrder) do
+    local featureId=id
+    keyRows[featureId]=keySection:AddButton({
+        Title=toggleTitles[featureId],
+        Description=bindings[featureId] or "Unbound",
+        Callback=function()
+            captureId=featureId
+            refreshKeyRows()
+        end
+    })
+end
+keySection:AddButton({Title="Clear all shortcuts",Description="Keeps Right Ctrl reserved.",Callback=function()
+    table.clear(bindings);captureId=nil;saveBindings();refreshKeyRows()
+end})
+connect(UserInputService.InputBegan,function(input,processed)
+    if not state.alive or input.UserInputType~=Enum.UserInputType.Keyboard then return end
+    local name=input.KeyCode.Name
+    if captureId then
+        if name=="RightControl" then captureId=nil;refreshKeyRows();return end
+        if name=="Escape" then captureId=nil;refreshKeyRows();return end
+        if name=="Backspace" or name=="Delete" then
+            bindings[captureId]=nil;captureId=nil;saveBindings();refreshKeyRows();return
+        end
+        if not keyAllowed(name) then return end
+        for id,existing in pairs(bindings) do
+            if id~=captureId and existing==name then
+                Fluent:Notify({Title="Shortcut conflict",Content="Already assigned to "..toggleTitles[id],Duration=3})
+                return
+            end
+        end
+        bindings[captureId]=name
+        captureId=nil
+        saveBindings();refreshKeyRows()
+        return -- assigning a key does not activate its feature
+    end
+    if processed or UserInputService:GetFocusedTextBox() or name=="RightControl" then return end
+    for id,key in pairs(bindings) do
+        if key==name and toggles[id] then toggles[id]:SetValue(not toggles[id].Value);break end
+    end
+end)
+connect(Window.Root:GetPropertyChangedSignal("Visible"),function()
+    if not Window.Root.Visible then captureId=nil;refreshKeyRows() end
+    if openTween then openTween:Cancel() end
+    if Window.Root.Visible then
+        menuScale.Scale=.96
+        openTween=TweenService:Create(menuScale,TweenInfo.new(.23,Enum.EasingStyle.Quint,Enum.EasingDirection.Out),{Scale=1})
+        openTween:Play()
+    else menuScale.Scale=1 end
+    syncCursor()
+end)
+connect(player.CharacterAdded,function() task.defer(function() if state.alive then syncCursor() end end) end)
+local function stopCursor()
+    manualCursor=false
+    if openTween then openTween:Cancel() end
+    syncCursor()
+end
+-- Use the real logo when the owner supplies a published Roblox image asset ID.
+-- A typographic fallback is intentional; no fabricated asset ID.
+local function playIntro()
+    local intro=create("CanvasGroup",gui,{
+        Name="XandMeIntro",Size=UDim2.fromScale(1,1),
+        BackgroundColor3=Color3.fromRGB(5,5,5),BackgroundTransparency=0,
+        GroupTransparency=0,ZIndex=100
+    })
+    local asset=environment.XandMeLogoAssetId
+    local rawId=type(asset)=="number" and tostring(asset) or type(asset)=="string" and asset or ""
+    local id=rawId:match("^rbxassetid://(%d+)$") or rawId:match("^(%d+)$")
+    local mark
+    if id then
+        mark=create("ImageLabel",intro,{AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(.5,.46),Size=UDim2.fromScale(.46,.32),BackgroundTransparency=1,Image="rbxassetid://"..id,ScaleType=Enum.ScaleType.Fit,ImageTransparency=1,ZIndex=101})
+        TweenService:Create(mark,TweenInfo.new(.45),{ImageTransparency=0}):Play()
+    else
+        mark=create("TextLabel",intro,{AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(.5,.46),Size=UDim2.fromScale(.82,.23),BackgroundTransparency=1,Text="XandMe.",Font=Enum.Font.GothamMedium,TextScaled=true,TextColor3=Color3.fromRGB(245,245,245),TextTransparency=1,ZIndex=101})
+        create("UITextSizeConstraint",mark,{MaxTextSize=72})
+        TweenService:Create(mark,TweenInfo.new(.45),{TextTransparency=0}):Play()
+    end
+    create("TextLabel",intro,{AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(.5,.64),Size=UDim2.fromOffset(260,20),BackgroundTransparency=1,Text="M O N O C H R O M E",Font=Enum.Font.Gotham,TextSize=11,TextColor3=Color3.fromRGB(155,155,155),ZIndex=101})
+    local line=create("Frame",intro,{AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(.5,.70),Size=UDim2.fromOffset(0,1),BackgroundColor3=Color3.fromRGB(245,245,245),BorderSizePixel=0,ZIndex=101})
+    TweenService:Create(line,TweenInfo.new(1.05,Enum.EasingStyle.Quint),{Size=UDim2.fromOffset(125,1)}):Play()
+    task.delay(1.2,function()
+        if not state.alive or not intro.Parent then return end
+        local fade=TweenService:Create(intro,TweenInfo.new(.48,Enum.EasingStyle.Quad),{GroupTransparency=1})
+        fade:Play()
+        fade.Completed:Connect(function()
+            if intro.Parent then intro:Destroy() end
+        end)
+    end)
+end
+syncCursor()
+
 Tabs.Settings:AddButton({
     Title="Unload Velion Hub",
     Description="Disconnect features and close the Fluent window",
@@ -1704,15 +1844,13 @@ if hasFilesystem then
             first:IgnoreThemeSettings()
             second:SetFolder("VelionDistrict")
             first:SetFolder("VelionDistrict/profiles")
-            second:BuildInterfaceSection(Tabs.Settings)
+            -- Keep fixed Right Ctrl and monochrome theme; no automatic feature activation.
             first:BuildConfigSection(Tabs.Settings)
-            first:LoadAutoloadConfig()
         end)
         if okSetup then
             saveManager=first
             interfaceManager=second
-            configStatus="Addons loaded, config UI built; autoload attempted. "
-                .."Disk roundtrip NOT verified."
+            configStatus="Manual profiles only. Startup feature autoload disabled; keybinds have separate storage."
         else
             configStatus="Addon setup error: "..tostring(err):sub(1,170)
         end
@@ -1725,8 +1863,8 @@ uiStatus:SetDesc(runUISelfCheck())
 pcall(function() Window:SelectTab(1) end)
 pcall(function()
     Fluent:Notify({
-        Title="Velion District V4.5",
-        Content="Fluent UI loaded. See Settings for diagnostic status.",
+        Title="XandMe Monochrome",
+        Content="Right Ctrl: menu. All feature toggles start disabled.",
         Duration=5
     })
 end)
@@ -1784,8 +1922,6 @@ connect(RunService.Heartbeat,function()
     end
     if now-lastTick<.25 then return end
     lastTick=now
-    updateNoClip()
-    updateSpeed()
     local char=player.Character
     local root=char and char:FindFirstChild("HumanoidRootPart")
     local closest=math.huge
@@ -1795,9 +1931,12 @@ connect(RunService.Heartbeat,function()
     state.abilitySignalsObserved=0
     for _,other in ipairs(list) do
         if other~=player then
-            local role=monitorPlayerRole(other,now)
+            local role="Unknown"
+            if state.playerESP or state.killerAlert or state.abilityNotify or state.roleTracking then
+                role=monitorPlayerRole(other,now)
+                if state.abilityNotify then monitorKillerAbility(other,role,now) end
+            end
             if role~="Unknown" then knownRoles+=1 end
-            monitorKillerAbility(other,role,now)
             if state.playerESP then ensurePlayerVisual(other)
             elseif playerVisuals[other] then removePlayerVisual(other) end
             if state.killerAlert and root then
@@ -1865,6 +2004,13 @@ connect(RunService.Heartbeat,function()
     skillStatus:SetDesc(skill)
     inputStatus:SetDesc(state.inputStatus)
     moonwalkStatusBox:SetDesc(state.moonwalkStatus)
+    local hum=char and char:FindFirstChildOfClass("Humanoid")
+    local velocity=root and root:IsA("BasePart") and root.AssemblyLinearVelocity or Vector3.zero
+    local horizontal=Vector3.new(velocity.X,0,velocity.Z).Magnitude
+    local pingText="unavailable"
+    local pingOK,ping=pcall(function() return player:GetNetworkPing() end)
+    if pingOK and type(ping)=="number" then pingText=string.format("%.0f ms (one-way estimate)",ping*1000) end
+    movementDiagnostics:SetDesc(string.format("FPS: %d | Network: %s\nNative WalkSpeed: %.1f | Horizontal velocity: %.1f studs/s\nNo movement override is applied by NoClip or Speed Assist.",state.fps,pingText,hum and hum.WalkSpeed or 0,horizontal))
 end)
 
 -- Keep experimental auto input isolated from ESP and do not infer success
@@ -1951,6 +2097,7 @@ local function cleanup()
     updateLighting()
     if state.speed then setSpeed(false) end
     cameraController.shutdown()
+    stopCursor()
     gui:Destroy()
     pcall(function() Fluent:Destroy() end)
     if environment.VelionVDCleanup==cleanup then
@@ -1958,5 +2105,5 @@ local function cleanup()
     end
 end
 environment.VelionVDCleanup=cleanup
-startObjectiveScan()
-print("[Velion District V4.5] Camera comfort controls; Roblox runtime not tested.")
+playIntro()
+print("[XandMe V4.6] Monochrome base, unbound shortcuts and native cursor; runtime not tested.")
