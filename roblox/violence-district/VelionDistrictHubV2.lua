@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V4.7 - SESSION SAFETY
+    VELION DISTRICT HUB V4.8 - RUNTIME DIAGNOSTICS
     For Roblox Violence District - client-side utility module.
     Game UI uses upstream Fluent; the World ESP engine is local code.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -74,6 +74,35 @@ local palette = {
     red=Color3.fromRGB(249,90,113)
 }
 local connections = {}
+-- Local UI diagnostics only: no game security interception or global hooks.
+local runtimeLog=(function()
+    local log={entries={},total=0,started=os.clock(),lastUpdate=0}
+    function log.record(source,err)
+        log.total+=1
+        local message=tostring(err):sub(1,240)
+        local last=log.entries[#log.entries]
+        if last and last.source==source and last.message==message then
+            last.count+=1
+            last.time=os.clock()
+        else
+            log.entries[#log.entries+1]={source=source,message=message,count=1,time=os.clock()}
+        end
+        if #log.entries>32 then table.remove(log.entries,1) end
+    end
+    function log.clear()
+        table.clear(log.entries)
+        log.total=0
+    end
+    function log.snapshot()
+        local lines={}
+        for i=math.max(1,#log.entries-3),#log.entries do
+            local item=log.entries[i]
+            lines[#lines+1]=string.format("+%.1fs | %s x%d: %s",item.time-log.started,item.source,item.count,item.message)
+        end
+        return #lines==0 and "No local UI errors recorded." or table.concat(lines,"\n")
+    end
+    return log
+end)()
 local function connect(signal,callback)
     local connection=signal:Connect(callback)
     connections[#connections+1]=connection
@@ -198,7 +227,7 @@ local uiHeight=math.min(490,math.max(320,cameraSize.Y-80))
 local createdWindow,Window=pcall(function()
     return Fluent:CreateWindow({
         Title="XandMe.",
-        SubTitle="Velion District / V4.7",
+        SubTitle="Velion District / V4.8",
         TabWidth=cameraSize.X<500 and 116 or 150,
         Size=UDim2.fromOffset(uiWidth,uiHeight),
         Acrylic=false,Theme="Darker",
@@ -1739,16 +1768,26 @@ connect(UserInputService.InputBegan,function(input,processed)
     end
 end)
 connect(Window.Root:GetPropertyChangedSignal("Visible"),function()
-    if not Window.Root.Visible then captureId=nil;refreshKeyRows() end
-    if openTween then openTween:Cancel() end
-    if Window.Root.Visible then
-        menuScale.Scale=.96
-        openTween=TweenService:Create(menuScale,TweenInfo.new(.23,Enum.EasingStyle.Quint,Enum.EasingDirection.Out),{Scale=1})
-        openTween:Play()
-    else menuScale.Scale=1 end
-    syncCursor()
+    local ok,err=pcall(function()
+        if not Window.Root.Visible then captureId=nil;refreshKeyRows() end
+        if openTween then openTween:Cancel() end
+        if Window.Root.Visible then
+            menuScale.Scale=.96
+            openTween=TweenService:Create(menuScale,TweenInfo.new(.23,Enum.EasingStyle.Quint,Enum.EasingDirection.Out),{Scale=1})
+            openTween:Play()
+        else menuScale.Scale=1 end
+    end)
+    if not ok then runtimeLog.record("menu animation",err);pcall(function() menuScale.Scale=1 end) end
+    ok,err=pcall(syncCursor)
+    if not ok then runtimeLog.record("cursor",err) end
 end)
-connect(player.CharacterAdded,function() task.defer(function() if state.alive then syncCursor() end end) end)
+connect(player.CharacterAdded,function()
+    task.defer(function()
+        if not state.alive then return end
+        local ok,err=pcall(syncCursor)
+        if not ok then runtimeLog.record("cursor",err) end
+    end)
+end)
 local function stopCursor()
     manualCursor=false
     state.manualCursor=false
@@ -1820,6 +1859,47 @@ safetySection:AddButton({Title="Restore Native Controls",Description="Disable ca
     local failures=restoreNativeControls(true)
     safetyStatus:SetDesc(#failures==0 and "Native control restoration requested." or table.concat(failures," | "))
 end})
+-- Diagnostics use only this interface's counters and errors.
+local diagnosticSection=Tabs.Settings:AddSection("Runtime Diagnostics")
+local diagnosticStatus=diagnosticSection:AddParagraph({Title="Runtime Diagnostics",Content="Waiting for local sample..."})
+local diagnosticErrors=diagnosticSection:AddParagraph({Title="Local UI Error Log",Content="No local UI errors recorded."})
+local function refreshDiagnostics()
+    if not state.alive or not Window.Root.Visible then return end
+    local count=0
+    for _,connection in ipairs(connections) do if connection.Connected then count+=1 end end
+    local memory="Unavailable"
+    local ok,kb=pcall(function() return collectgarbage("count") end)
+    if ok and type(kb)=="number" then memory=string.format("%.1f MiB (Lua heap)",kb/1024) end
+    local rows=0
+    for _ in pairs(keyRows) do rows+=1 end
+    local assigned=0
+    for _ in pairs(bindings) do assigned+=1 end
+    diagnosticStatus:SetDesc(string.format("Uptime: %.0fs | FPS: %d\nLua memory: %s\nTracked connections: %d | shortcut rows: %d | assigned: %d\nUI errors: %d | retained records: %d",os.clock()-runtimeLog.started,state.fps,memory,count,rows,assigned,runtimeLog.total,#runtimeLog.entries))
+    diagnosticErrors:SetDesc(runtimeLog.snapshot())
+end
+diagnosticSection:AddButton({Title="Reset UI Presentation",Description="Cancel the menu animation, reset scale, cancel key capture and refresh cursor state. Does not change gameplay.",Callback=function()
+    local ok,err=pcall(function()
+        if openTween then openTween:Cancel();openTween=nil end
+        menuScale.Scale=1
+        captureId=nil
+        refreshKeyRows()
+        syncCursor()
+    end)
+    if not ok then runtimeLog.record("UI presentation",err) end
+    pcall(refreshDiagnostics)
+end})
+diagnosticSection:AddButton({Title="Clear Diagnostic Log",Description="Clear only the local UI error history.",Callback=function()
+    runtimeLog.clear()
+    pcall(refreshDiagnostics)
+end})
+connect(RunService.Heartbeat,function()
+    if not state.alive or not Window.Root.Visible then return end
+    local now=os.clock()
+    if now-runtimeLog.lastUpdate<1 then return end
+    runtimeLog.lastUpdate=now
+    local ok,err=pcall(refreshDiagnostics)
+    if not ok then runtimeLog.record("diagnostic display",err) end
+end)
 -- Use the real logo when the owner supplies a published Roblox image asset ID.
 -- A typographic fallback is intentional; no fabricated asset ID.
 local function playIntro()
@@ -2159,32 +2239,41 @@ end)
 local function cleanup()
     if not state.alive then return end
     state.alive=false
-    setMoonwalk(false)
+    local function attempt(name,fn)
+        local ok,err=pcall(fn)
+        if not ok then
+            runtimeLog.record("cleanup / "..name,err)
+            warn("[XandMe cleanup] "..name..": "..tostring(err))
+        end
+    end
+    attempt("moonwalk",function() setMoonwalk(false) end)
     scanGeneration+=1
-    stopSourceWatchers()
+    attempt("source watchers",stopSourceWatchers)
     for _,conn in ipairs(connections) do
-        pcall(function() conn:Disconnect() end)
+        attempt("disconnect",function() conn:Disconnect() end)
     end
     table.clear(connections)
-    for other in pairs(playerVisuals) do removePlayerVisual(other) end
+    for other in pairs(playerVisuals) do
+        attempt("player visual",function() removePlayerVisual(other) end)
+    end
     for obj,item in pairs(objectiveVisuals) do
-        if item.gui then item.gui:Destroy() end
-        if item.highlight then item.highlight:Destroy() end
+        if item.gui then attempt("object label",function() item.gui:Destroy() end) end
+        if item.highlight then attempt("object highlight",function() item.highlight:Destroy() end) end
         objectiveVisuals[obj]=nil
     end
-    setNoClip(false)
+    attempt("collision",function() setNoClip(false) end)
     state.fullbright=false
     state.noFog=false
-    updateLighting()
-    if state.speed then setSpeed(false) end
-    cameraController.shutdown()
-    stopCursor()
-    gui:Destroy()
-    pcall(function() Fluent:Destroy() end)
+    attempt("lighting",updateLighting)
+    if state.speed then attempt("speed",function() setSpeed(false) end) end
+    attempt("camera",cameraController.shutdown)
+    attempt("cursor",stopCursor)
+    attempt("overlay",function() gui:Destroy() end)
+    attempt("interface",function() Fluent:Destroy() end)
     if environment.VelionVDCleanup==cleanup then
         environment.VelionVDCleanup=nil
     end
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V4.7] Manual session safety and recovery; runtime not tested.")
+print("[XandMe V4.8] Local UI diagnostics and isolated cleanup; runtime not tested.")
