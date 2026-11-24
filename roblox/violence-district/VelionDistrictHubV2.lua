@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V5.3.2 - CLOSE AND MOONWALK
+    VELION DISTRICT HUB V5.3.3 - SIMPLE ESP AND ANIMATION DIAGNOSTICS
     For Roblox Violence District - client-side utility module.
     Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -60,7 +60,7 @@ local state = {
     maxWorldLabels=22, maxWorldHighlights=20, objectLabels=false,
     scanCandidates=0, scanScanned=0, scanDurationMs=0,
     visibleLabels=0, visibleHighlights=0, fps=60,
-    highlightBudgetAvailable=20, objectiveOrder=0,
+    highlightBudgetAvailable=20, objectiveOrder=0, npcFound=0, npcVisible=0,
 }
 local palette = {
     bg=Color3.fromRGB(26,28,27),
@@ -290,7 +290,7 @@ local Native,Window=(function()
     local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0,Active=true})
     local brand=text(header,"XandMe.",26,true)
     brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-144,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
-    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3.2",10,false,C.muted)
+    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3.3",10,false,C.muted)
     subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-144,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
     local minimize=btn(header,"−",34,30)
     minimize.AnchorPoint=Vector2.new(1,.5);minimize.Position=UDim2.new(1,-78,.5,0)
@@ -875,30 +875,28 @@ local function removePlayerVisual(other)
     playerVisuals[other]=nil
 end
 local function ensurePlayerVisual(other)
-    if other==player or not state.playerESP then
-        removePlayerVisual(other);return
-    end
+    if other==player then removePlayerVisual(other);return end
     local isNPC=other:IsA("Model")
-    if isNPC and (not state.npcESP or not other:IsDescendantOf(Workspace)
-        or Players:GetPlayerFromCharacter(other) or not other:FindFirstChildOfClass("Humanoid")) then
+    if isNPC then
+        if not state.npcESP or not other:IsDescendantOf(Workspace)
+            or Players:GetPlayerFromCharacter(other)
+            or not (other:FindFirstChildOfClass("Humanoid") or other:FindFirstChildOfClass("AnimationController")) then
+            removePlayerVisual(other);return
+        end
+    elseif not state.playerESP then
         removePlayerVisual(other);return
     end
     local character=isNPC and other or other.Character
-    local head=character and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart"))
+    local head=character and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
+        or character.PrimaryPart or character:FindFirstChildWhichIsA("BasePart",true))
     if not head or not head:IsA("BasePart") then
         removePlayerVisual(other);return
     end
     local role,color="NPC",espColors.Unknown
     if not isNPC then role,color=roleOf(other) end
-    if (role=="Killer" and not state.killerESP) or
-        (role=="Survivor" and not state.survivorESP) or
-        (role=="Unknown" and not state.unknownESP) then
-        removePlayerVisual(other)
-        return
-    end
     local root=player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-    local targetRoot=character:FindFirstChild("HumanoidRootPart")
-    local distance=(root and targetRoot)
+    local targetRoot=character:FindFirstChild("HumanoidRootPart") or head
+    local distance=(root and root:IsA("BasePart") and targetRoot:IsA("BasePart"))
         and math.floor((root.Position-targetRoot.Position).Magnitude) or nil
     if distance and distance>state.espDistance then
         removePlayerVisual(other)
@@ -948,7 +946,7 @@ local function ensurePlayerVisual(other)
         local item=character:FindFirstChildWhichIsA("Tool")
         if item then heldItem=item.Name end
     end
-    if state.playerHighlight then
+    if state.playerESP or (isNPC and state.npcESP) then
         if not existing.highlight then
             existing.highlight=create("Highlight",Workspace,{
                 Name="VelionVDPlayerOutline",Adornee=character,
@@ -964,11 +962,9 @@ local function ensurePlayerVisual(other)
     end
     if existing.billboard.Adornee~=head then existing.billboard.Adornee=head end
     existing.billboard.MaxDistance=state.espDistance
-    existing.billboard.Enabled=state.playerNames or status~=nil
-        or heldItem~=nil or (state.playerMask and mask~=nil)
-        or (state.playerDistance and distance~=nil)
+    existing.billboard.Enabled=true
     existing.text.TextColor3=color
-    existing.text.Text=(state.playerNames and (nick.." ["..role.."]") or "")
+    existing.text.Text=nick
         ..(state.playerDistance and distance and
             ("\n"..distance.." studs") or "")
         ..(mask and ("\nMask: "..mask) or "")
@@ -992,12 +988,52 @@ local function ensurePlayerVisual(other)
                 (center.Y-60)/math.max(math.abs(direction.Y),1))
             local point=center+direction*math.clamp(maxScale,0,1)
             existing.pointer.Position=UDim2.fromOffset(point.X-92,point.Y-21)
-            existing.pointer.Text=nick.." ("..role..")"
+            existing.pointer.Text=nick
                 ..(distance and ("\n"..distance.." studs") or "")
             existing.pointer.TextColor3=color
         end
     end
 end
+
+-- Untagged rig discovery is available in Studio for local developer testing.
+-- Published experiences use explicit developer tags.
+local npcDebug=(function()
+    local cached: {[Model]: boolean}={}
+    local lastScan=-math.huge
+    local collection=game:GetService("CollectionService")
+    local function valid(model: Instance): boolean
+        if not model:IsA("Model") or not model:IsDescendantOf(Workspace) then return false end
+        if Players:GetPlayerFromCharacter(model) then return false end
+        if not (model:FindFirstChildOfClass("Humanoid") or model:FindFirstChildOfClass("AnimationController")) then return false end
+        local node: Instance?=model
+        while node and node~=Workspace do
+            local name=node.Name:lower()
+            if name:find("preview",1,true) or name:find("fakecharacter",1,true) or name:find("lobby",1,true) then return false end
+            node=node.Parent
+        end
+        return true
+    end
+    local function collect(now: number)
+        if now-lastScan>=1.5 then
+            lastScan=now
+            table.clear(cached)
+            for _,model in ipairs(collection:GetTagged("VelionDebugNPC")) do
+                if valid(model) then cached[model]=true end
+            end
+            if RunService:IsStudio() then
+                for _,node in ipairs(Workspace:GetDescendants()) do
+                    if node:IsA("Humanoid") or node:IsA("AnimationController") then
+                        local model=node.Parent
+                        if model and valid(model) then cached[model]=true end
+                    end
+                end
+            end
+        end
+        for model in pairs(cached) do if not valid(model) then cached[model]=nil end end
+        return cached
+    end
+    return {collect=collect,reset=function() table.clear(cached);lastScan=-math.huge end}
+end)()
 
 -- WORLD ESP V2: map-only discovery, lazy rendering and strict visibility caps.
 -- High-instance-count lobby objects, cosmetic preview models and fake
@@ -1709,17 +1745,26 @@ local setMoonwalk=(function()
     end
     local function locomotion(track: AnimationTrack): boolean
         if not track.IsPlaying or not track.Looped or track.Length<=0 then return false end
-        if track.Priority~=Enum.AnimationPriority.Movement and track.Priority~=Enum.AnimationPriority.Core then return false end
         local anim=track.Animation
         local name=(track.Name.." "..(anim and anim.Name or "")):lower()
-        if name:find("walk",1,true) or name:find("run",1,true) then return true end
+        for _,word in ipairs({"idle","attack","slash","jump","fall","climb","swim","hit","stun","vault","emote","skill"}) do
+            if name:find(word,1,true) then return false end
+        end
+        for _,word in ipairs({"walk","run","sprint","strafe","locomotion","movement","backpedal"}) do
+            if name:find(word,1,true) then return true end
+        end
+        if track.Priority==Enum.AnimationPriority.Movement then return true end
         local char=player.Character
         local animate=char and char:FindFirstChild("Animate")
         if not animate or not anim then return false end
         for _,kind in ipairs({"walk","run"}) do
             local group=animate:FindFirstChild(kind)
-            local nativeAnimation=group and (group:IsA("Animation") and group or group:FindFirstChildWhichIsA("Animation",true))
-            if nativeAnimation and nativeAnimation:IsA("Animation") and nativeAnimation.AnimationId==anim.AnimationId then return true end
+            if group then
+                if group:IsA("Animation") and group.AnimationId==anim.AnimationId then return true end
+                for _,candidate in ipairs(group:GetDescendants()) do
+                    if candidate:IsA("Animation") and candidate.AnimationId==anim.AnimationId then return true end
+                end
+            end
         end
         return false
     end
@@ -1733,15 +1778,21 @@ local setMoonwalk=(function()
         local char=player.Character
         local hum=char and char:FindFirstChildOfClass("Humanoid")
         local animator=hum and hum:FindFirstChildOfClass("Animator")
-        if left==right or not hum or hum.Health<=0 or not animator or hum.Sit
-            or hum.FloorMaterial==Enum.Material.Air or hum.MoveDirection.Magnitude<.05 then
-            restoreAll()
-            state.moonwalkStatus="READY | hold A or D while walking on the ground"
-            return
+        if not animator and char then animator=char:FindFirstChildWhichIsA("Animator",true) end
+        local key=left and not right and "A" or right and not left and "D" or "-"
+        if left==right then restoreAll();state.moonwalkStatus="READY | hold A or D";return end
+        if not hum or hum.Health<=0 or hum.Sit then restoreAll();state.moonwalkStatus="WAITING | humanoid unavailable";return end
+        if not animator then restoreAll();state.moonwalkStatus="WAITING | Animator unavailable";return end
+        local phase=hum:GetState()
+        if phase==Enum.HumanoidStateType.Jumping or phase==Enum.HumanoidStateType.Freefall then
+            restoreAll();state.moonwalkStatus="READY | airborne";return
         end
         local seen: {[AnimationTrack]: boolean}={}
         local count=0
-        for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
+        local tracks=animator:GetPlayingAnimationTracks()
+        local trackNames={}
+        for _,track in ipairs(tracks) do
+            if #trackNames<3 then trackNames[#trackNames+1]=track.Name..":"..track.Priority.Name end
             if locomotion(track) then
                 local record=activeTracks[track]
                 local observed=track.Speed
@@ -1763,7 +1814,7 @@ local setMoonwalk=(function()
         end
         state.moonwalkStatus=count>0
             and ("ACTIVE | "..(left and "A" or "D").." | reversed tracks: "..count)
-            or "WAITING | no compatible looping walk/run animation"
+            or ("WAITING | tracks: "..#tracks.." | "..table.concat(trackNames,", "))
     end
     return function(enabled: boolean)
         state.moonwalk=enabled and state.alive
@@ -1802,125 +1853,87 @@ local statusSkill=Tabs.Main:AddParagraph({
 local statusNext=Tabs.Main:AddParagraph({
     Title="NEXT KILLER (ESTIMATE)",Content="Waiting for lobby"
 })
-registerToggle(Tabs.Players,"PlayerESPMaster","Enable player markers",
-    "Overall player outlines / nametags switch","playerESP",
+-- One toggle per feature. Name labels and outlines are enabled together.
+registerToggle(Tabs.Players,"PlayerESPMaster","Player ESP",
+    "Name + body highlight; automatic role colors","playerESP",
     function(value)
         if not value then
-            for other in pairs(playerVisuals) do
-                removePlayerVisual(other)
+            for subject in pairs(playerVisuals) do
+                if subject:IsA("Player") then removePlayerVisual(subject) end
             end
         end
     end)
-registerToggle(Tabs.Objects,"ObjectESPMaster","Enable map markers",
-    "Show map object highlights and labels","objectiveESP",
+registerToggle(Tabs.Players,"NPCESP","NPC / Bot ESP",
+    "Name + outline; Studio rigs or developer-tagged NPCs","npcESP",
     function(value)
-        if value then startObjectiveScan()
-        else
-            scanGeneration+=1
-            stopSourceWatchers()
-            clearObjectives()
-            state.scanProgress="Disabled"
-        end
-        refreshObjectiveVisibility()
-    end)
-
--- Player ESP: category and display toggles are independent.
-Tabs.Players:AddParagraph({Title="How to use",Content="Enable player markers, choose a category, then enable names or body highlight. Detection remains unverified."})
-registerToggle(Tabs.Players,"KillerESP","Killer ESP",
-    "Killer character outline + labels","killerESP")
-registerColor(Tabs.Players,"KillerColor","Killer Color","Killer")
-registerToggle(Tabs.Players,"SurvivorESP","Survivor ESP",
-    "Survivor character outline + labels","survivorESP")
-registerColor(Tabs.Players,"SurvivorColor","Survivor Color","Survivor")
-registerToggle(Tabs.Players,"UnknownESP","Unknown Role Markers",
-    "Disabled by default; prevents lobby role false positives","unknownESP")
-registerToggle(Tabs.Players,"NPCESP","Debug NPC / Dummy",
-    "Developer-tagged VelionDebugNPC models; requires names or body highlight","npcESP",
-    function(value)
+        npcDebug.reset()
         if not value then
             for subject in pairs(playerVisuals) do
                 if subject:IsA("Model") then removePlayerVisual(subject) end
             end
+            state.npcFound=0
+            state.npcVisible=0
         end
     end)
-registerToggle(Tabs.Players,"SurvivorItems","Survivor Equipped Items",
-    "Show Tool names equipped by visible Survivor characters",
-    "survivorItemsESP")
-registerToggle(Tabs.Players,"PlayerOutline","Body Highlight",
-    "Color or outline the character model","playerHighlight")
-registerToggle(Tabs.Players,"NameESP","Player Names",
-    "Show names and roles","playerNames")
-registerToggle(Tabs.Players,"DistanceESP","Show Distance",
-    "Show stud distance on name tags","playerDistance")
-registerToggle(Tabs.Players,"MaskESP","Killer Mask ESP",
-    "Display replicated mask name","playerMask")
-registerToggle(Tabs.Players,"ChasedESP","Chased Indicator",
-    "Special marker for chased player","chaseStatus")
-registerColor(Tabs.Players,"ChasedColor","Chased Indicator Color","Chased")
-registerToggle(Tabs.Players,"KnockedESP","Knocked Indicator",
-    "Show knocked status","knockedStatus")
-registerColor(Tabs.Players,"KnockedColor","Knocked Indicator Color","Knocked")
-registerToggle(Tabs.Players,"HookedESP","Hooked Indicator",
-    "Show hooked status","hookedStatus")
-registerColor(Tabs.Players,"HookedColor","Hooked Indicator Color","Hooked")
-registerToggle(Tabs.Players,"OffscreenESP","Off-Screen Pointers",
-    "Display directions near screen edges","offscreenESP")
-registerToggle(Tabs.Players,"KillerWarn","Killer Proximity Alert",
-    "Notify when known killer is less than 99 studs","killerAlert")
-
--- Object ESP: separate toggle and color selector per kind.
-Tabs.Objects:AddParagraph({Title="How to use",Content="Enable map markers, select an object category and enable labels or outlines. Click the color square to edit its color."})
-registerToggle(Tabs.Objects,"ObjectOutline","Object Highlight",
-    "Enable object Highlight outlines / fill","objectHighlight",
-    function() refreshObjectiveVisibility() end)
+local npcStatus=Tabs.Players:AddParagraph({
+    Title="NPC STATUS",Content="OFF"
+})
+local function syncObjectESP()
+    local active=state.generatorESP or state.palletESP or state.windowESP
+        or state.hookESP or state.gateESP or state.worldItemsESP
+    local previous=state.objectiveESP
+    state.objectiveESP=active
+    state.objectLabels=active
+    state.objectHighlight=active
+    state.generatorProgressESP=state.generatorESP
+    if active and not previous then
+        startObjectiveScan()
+    elseif not active then
+        scanGeneration+=1
+        stopSourceWatchers()
+        clearObjectives()
+        state.scanProgress="Disabled"
+    end
+    lastObjectiveRefresh=0
+    refreshObjectiveVisibility()
+end
 registerToggle(Tabs.Objects,"GeneratorESP","Generator ESP",
-    "Generator highlight + location","generatorESP",
-    function() refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"GeneratorColor","Generator Color","Generator")
-registerToggle(Tabs.Objects,"GenProgress","Generator Repair %",
-    "Show replicated repair percent","generatorProgressESP",
-    function() refreshObjectiveVisibility() end)
+    "Highlight + name + repair progress when available","generatorESP",syncObjectESP)
 registerToggle(Tabs.Objects,"PalletESP","Pallet ESP",
-    "Both Pallet / Palletwrong","palletESP",
-    function() refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"PalletColor","Pallet Color","Pallet")
+    "Highlight + name","palletESP",syncObjectESP)
 registerToggle(Tabs.Objects,"WindowESP","Window ESP",
-    "Window map objects","windowESP",
-    function() refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"WindowColor","Window Color","Window")
+    "Highlight + name","windowESP",syncObjectESP)
 registerToggle(Tabs.Objects,"HookESP","Hook ESP",
-    "Map Hook models","hookESP",
-    function() refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"HookColor","Hook Color","Hook")
+    "Highlight + name","hookESP",syncObjectESP)
 registerToggle(Tabs.Objects,"GateESP","Gate ESP",
-    "Exit gates","gateESP",
-    function() refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"GateColor","Gate Color","Gate")
-registerToggle(Tabs.Objects,"WorldItems","World Pickup Items",
-    "Show Tool and recognized pickup objects within Map/Interactables",
-    "worldItemsESP",
-    function() lastObjectiveRefresh=0;refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"ItemColor","Item Color","Item")
-local itemInfo=Tabs.Objects:AddParagraph({
+    "Highlight + name","gateESP",syncObjectESP)
+registerToggle(Tabs.Objects,"WorldItems","Item ESP",
+    "Highlight + name","worldItemsESP",syncObjectESP)
+local espSettings=Tabs.Settings:AddSection("ESP Settings")
+for _,category in ipairs({"Killer","Survivor","Unknown","Generator","Pallet","Window","Hook","Gate","Item"}) do
+    local colorName=category=="Unknown" and "Neutral / NPC" or category
+    registerColor(espSettings,category.."Color",colorName.." Color",category)
+end
+local itemInfo=espSettings:AddParagraph({
     Title="SURVIVOR ITEMS ESP",
     Content="Replicated world Tools and pickup prompts only. Unreplicated inventories are unavailable."
 })
-Tabs.Objects:AddButton({
+espSettings:AddButton({
     Title="Rescan Map",Description="Refresh Workspace map references",
     Callback=function() startObjectiveScan() end
 })
-local objectStatus=Tabs.Objects:AddParagraph({
+local objectStatus=espSettings:AddParagraph({
     Title="WORLD ESP V2",Content="Waiting for active map..."
 })
-local perfStatus=Tabs.Objects:AddParagraph({
+local perfStatus=espSettings:AddParagraph({
     Title="WORLD ESP DIAGNOSTICS",
     Content="Map status, cache, visible labels, highlights and FPS"
 })
-local progressStatus=Tabs.Objects:AddParagraph({
+local progressStatus=espSettings:AddParagraph({
     Title="GENERATOR PROGRESS",
     Content="Auto detects percentage where possible; ambiguous values show raw."
 })
-local progressDropdown=Tabs.Objects:AddDropdown("GeneratorProgressScale",{
+local progressDropdown=espSettings:AddDropdown("GeneratorProgressScale",{
     Title="Generator Progress Units",
     Description="Auto / percent 0-100 / fraction 0-1 / raw value",
     Values={"Auto","Percent","Fraction","Raw"},Default="Auto",
@@ -1932,10 +1945,7 @@ local progressDropdown=Tabs.Objects:AddDropdown("GeneratorProgressScale",{
     end
 })
 controls.GeneratorProgressScale=progressDropdown
-registerToggle(Tabs.Objects,"ObjectLabels","Object Labels",
-    "Display distance-prioritized labels with a fixed budget","objectLabels",
-    function() lastObjectiveRefresh=0;refreshObjectiveVisibility() end)
-registerSlider(Tabs.Objects,"MaxLabels","Maximum Object Labels",
+registerSlider(espSettings,"MaxLabels","Maximum Object Labels",
     "Render nearest prioritized labels; 0 hides labels",
     state.maxWorldLabels,0,40,0,
     function(v)
@@ -1943,7 +1953,7 @@ registerSlider(Tabs.Objects,"MaxLabels","Maximum Object Labels",
         lastObjectiveRefresh=0
         refreshObjectiveVisibility()
     end)
-registerSlider(Tabs.Objects,"MaxHighlights","Maximum Object Highlights",
+registerSlider(espSettings,"MaxHighlights","Maximum Object Highlights",
     "Caps simultaneous highlights to protect FPS (max 26)",
     state.maxWorldHighlights,0,26,0,
     function(v)
@@ -1951,11 +1961,11 @@ registerSlider(Tabs.Objects,"MaxHighlights","Maximum Object Highlights",
         lastObjectiveRefresh=0
         refreshObjectiveVisibility()
     end)
-registerSlider(Tabs.Objects,"ESPRange","ESP Distance",
+registerSlider(espSettings,"ESPRange","ESP Distance",
     "Max object and player visibility range (studs)",
     state.espDistance,100,2000,0,
     function(v) state.espDistance=v;refreshObjectiveVisibility() end)
-local hMode=Tabs.Objects:AddDropdown("HighlightMode",{
+local hMode=espSettings:AddDropdown("HighlightMode",{
     Title="Highlight Mode",
     Description="Choose between outline, fill or both",
     Values={"Outline","Fill","Both"},Default=1,
@@ -2303,6 +2313,10 @@ emergencyDisable=function()
         if toggleStateKeys[id] then state[toggleStateKeys[id]]=false end
     end
     state.roleTracking=false
+    state.objectiveESP=false
+    state.objectLabels=false
+    state.objectHighlight=false
+    state.generatorProgressESP=false
     state.sceneBlur=false
     for _,id in ipairs(toggleOrder) do
         attempt(id,function() toggles[id]:SetValue(false) end)
@@ -2551,15 +2565,16 @@ connect(RunService.Heartbeat,function()
             end
         end
     end
-    -- Only explicitly developer-tagged NPCs, not arbitrary lobby/preview rigs.
     do
         local seen={}
-        if state.playerESP and state.npcESP then
-            for _,model in ipairs(game:GetService("CollectionService"):GetTagged("VelionDebugNPC")) do
-                if model:IsA("Model") and model:IsDescendantOf(Workspace) then
-                    seen[model]=true
-                    ensurePlayerVisual(model)
-                end
+        state.npcFound=0
+        state.npcVisible=0
+        if state.npcESP then
+            for model in pairs(npcDebug.collect(now)) do
+                seen[model]=true
+                state.npcFound+=1
+                ensurePlayerVisual(model)
+                if playerVisuals[model] then state.npcVisible+=1 end
             end
         end
         for subject in pairs(playerVisuals) do
@@ -2618,6 +2633,7 @@ connect(RunService.Heartbeat,function()
         state.visibleHighlights,state.maxWorldHighlights,state.fps))
     skillStatus:SetDesc(skill)
     inputStatus:SetDesc(state.inputStatus)
+    npcStatus:SetDesc(state.npcESP and string.format("%s | detected: %d | marked: %d",RunService:IsStudio() and "Studio rig discovery" or "Tagged NPCs",state.npcFound,state.npcVisible) or "OFF")
     moonwalkStatusBox:SetDesc(state.moonwalkStatus)
     local hum=char and char:FindFirstChildOfClass("Humanoid")
     local velocity=root and root:IsA("BasePart") and root.AssemblyLinearVelocity or Vector3.zero
@@ -2655,6 +2671,8 @@ local function cleanup()
         end
     end
     attempt("moonwalk",function() setMoonwalk(false) end)
+    npcDebug.reset()
+    state.objectiveESP=false
     scanGeneration+=1
     attempt("source watchers",stopSourceWatchers)
     for _,conn in ipairs(connections) do
@@ -2684,4 +2702,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V5.3.2] Close and cosmetic Moonwalk revision; Roblox runtime not tested.")
+print("[XandMe V5.3.3] Simple ESP and Moonwalk diagnostics; Roblox runtime not tested.")
