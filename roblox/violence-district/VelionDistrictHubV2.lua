@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V5.3.3 - SIMPLE ESP AND ANIMATION DIAGNOSTICS
+    VELION DISTRICT HUB V5.3.4 - DIRECTIONAL MOONWALK
     For Roblox Violence District - client-side utility module.
     Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -290,7 +290,7 @@ local Native,Window=(function()
     local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0,Active=true})
     local brand=text(header,"XandMe.",26,true)
     brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-144,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
-    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3.3",10,false,C.muted)
+    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3.4",10,false,C.muted)
     subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-144,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
     local minimize=btn(header,"−",34,30)
     minimize.AnchorPoint=Vector2.new(1,.5);minimize.Position=UDim2.new(1,-78,.5,0)
@@ -1723,117 +1723,93 @@ end
 
 
 
--- Cosmetic moonwalk: reverse compatible native locomotion tracks while A/D
--- is held. Never changes movement input, speed, collision or root orientation.
+-- DBD-inspired directional moonwalk for developer-authorized movement testing.
+-- Keep native movement and animation; only change horizontal facing while A/D is held.
 local setMoonwalk=(function()
     local frameConnection: RBXScriptConnection?=nil
-    local activeTracks: {[AnimationTrack]: {native: number, applied: number}}={}
-    local function restoreTrack(track: AnimationTrack)
-        local record=activeTracks[track]
-        if not record then return end
-        activeTracks[track]=nil
-        local ok,err=pcall(function()
-            -- Don't overwrite a newer speed chosen by the experience.
-            if math.abs(track.Speed-record.applied)<.001 then
-                track:AdjustSpeed(record.native)
-            end
-        end)
-        if not ok then runtimeLog.record("moonwalk restore",err) end
-    end
-    local function restoreAll()
-        for track in pairs(activeTracks) do restoreTrack(track) end
-    end
-    local function locomotion(track: AnimationTrack): boolean
-        if not track.IsPlaying or not track.Looped or track.Length<=0 then return false end
-        local anim=track.Animation
-        local name=(track.Name.." "..(anim and anim.Name or "")):lower()
-        for _,word in ipairs({"idle","attack","slash","jump","fall","climb","swim","hit","stun","vault","emote","skill"}) do
-            if name:find(word,1,true) then return false end
+    local controlledHumanoid: Humanoid?=nil
+    local originalAutoRotate: boolean?=nil
+    local rotationTime=.065
+    local function restore()
+        local hum=controlledHumanoid
+        local original=originalAutoRotate
+        controlledHumanoid=nil
+        originalAutoRotate=nil
+        if hum and hum.Parent and original~=nil then
+            local ok,err=pcall(function() hum.AutoRotate=original end)
+            if not ok then runtimeLog.record("moonwalk restore",err) end
         end
-        for _,word in ipairs({"walk","run","sprint","strafe","locomotion","movement","backpedal"}) do
-            if name:find(word,1,true) then return true end
-        end
-        if track.Priority==Enum.AnimationPriority.Movement then return true end
-        local char=player.Character
-        local animate=char and char:FindFirstChild("Animate")
-        if not animate or not anim then return false end
-        for _,kind in ipairs({"walk","run"}) do
-            local group=animate:FindFirstChild(kind)
-            if group then
-                if group:IsA("Animation") and group.AnimationId==anim.AnimationId then return true end
-                for _,candidate in ipairs(group:GetDescendants()) do
-                    if candidate:IsA("Animation") and candidate.AnimationId==anim.AnimationId then return true end
-                end
-            end
-        end
-        return false
     end
-    local function update()
-        if not state.alive or not state.moonwalk then restoreAll();return end
+    local function authorized(): boolean
+        return RunService:IsStudio() or Workspace:GetAttribute("VelionAllowMoonwalk")==true
+    end
+    local function update(dt: number)
+        if not state.alive or not state.moonwalk then restore();return end
+        if not authorized() then
+            restore();state.moonwalkStatus="LOCKED | developer movement test only";return
+        end
         if UserInputService:GetFocusedTextBox() then
-            restoreAll();state.moonwalkStatus="READY | text input focused";return
+            restore();state.moonwalkStatus="READY | text input focused";return
         end
         local left=UserInputService:IsKeyDown(Enum.KeyCode.A)
         local right=UserInputService:IsKeyDown(Enum.KeyCode.D)
+        if not left and not right then
+            restore();state.moonwalkStatus="READY | hold A or D";return
+        end
         local char=player.Character
         local hum=char and char:FindFirstChildOfClass("Humanoid")
-        local animator=hum and hum:FindFirstChildOfClass("Animator")
-        if not animator and char then animator=char:FindFirstChildWhichIsA("Animator",true) end
-        local key=left and not right and "A" or right and not left and "D" or "-"
-        if left==right then restoreAll();state.moonwalkStatus="READY | hold A or D";return end
-        if not hum or hum.Health<=0 or hum.Sit then restoreAll();state.moonwalkStatus="WAITING | humanoid unavailable";return end
-        if not animator then restoreAll();state.moonwalkStatus="WAITING | Animator unavailable";return end
+        if controlledHumanoid and controlledHumanoid~=hum then restore() end
+        local root=hum and hum.RootPart
+        if not hum or hum.Health<=0 or hum.Sit or hum.PlatformStand or not root or root.Anchored then
+            restore();state.moonwalkStatus="WAITING | character not ready";return
+        end
         local phase=hum:GetState()
-        if phase==Enum.HumanoidStateType.Jumping or phase==Enum.HumanoidStateType.Freefall then
-            restoreAll();state.moonwalkStatus="READY | airborne";return
+        if phase~=Enum.HumanoidStateType.Running and phase~=Enum.HumanoidStateType.Landed then
+            restore();state.moonwalkStatus="READY | "..phase.Name;return
         end
-        local seen: {[AnimationTrack]: boolean}={}
-        local count=0
-        local tracks=animator:GetPlayingAnimationTracks()
-        local trackNames={}
-        for _,track in ipairs(tracks) do
-            if #trackNames<3 then trackNames[#trackNames+1]=track.Name..":"..track.Priority.Name end
-            if locomotion(track) then
-                local record=activeTracks[track]
-                local observed=track.Speed
-                -- Reuse the latest native forward playback rate, never reverse
-                -- a paused or already reversed track owned by another system.
-                local native=record and record.native or observed
-                if record and math.abs(observed-record.applied)>.001 then native=observed end
-                if native>0 then
-                    local target=-math.abs(native)
-                    if math.abs(observed-target)>.001 then track:AdjustSpeed(target) end
-                    activeTracks[track]={native=native,applied=target}
-                    seen[track]=true
-                    count+=1
-                end
-            end
+        local move=hum.MoveDirection
+        local direction=Vector3.new(move.X,0,move.Z)
+        if direction.Magnitude<.05 then
+            restore();state.moonwalkStatus="READY | no movement";return
         end
-        for track in pairs(activeTracks) do
-            if not seen[track] then restoreTrack(track) end
+        if controlledHumanoid~=hum then
+            controlledHumanoid=hum
+            originalAutoRotate=hum.AutoRotate
         end
-        state.moonwalkStatus=count>0
-            and ("ACTIVE | "..(left and "A" or "D").." | reversed tracks: "..count)
-            or ("WAITING | tracks: "..#tracks.." | "..table.concat(trackNames,", "))
+        hum.AutoRotate=false
+        local facing=-direction.Unit
+        local position=root.Position
+        local desired=CFrame.lookAt(position,position+facing)
+        local alpha=1-math.exp(-math.clamp(dt,0,.1)/rotationTime)
+        local current=root.CFrame
+        local look=current.LookVector
+        local flatLook=Vector3.new(look.X,0,look.Z)
+        if flatLook.Magnitude>.01 then
+            current=CFrame.lookAt(position,position+flatLook.Unit)
+        end
+        root.CFrame=current:Lerp(desired,alpha)
+        local dot=math.clamp(root.CFrame.LookVector:Dot(facing),-1,1)
+        local angle=math.deg(math.acos(dot))
+        state.moonwalkStatus=string.format("ACTIVE | %s | facing error %.0f°",left and right and "A+D" or left and "A" or "D",angle)
     end
     return function(enabled: boolean)
         state.moonwalk=enabled and state.alive
         if state.moonwalk then
-            state.moonwalkStatus="READY | hold A or D while walking"
+            state.moonwalkStatus=authorized() and "READY | hold A or D" or "LOCKED | developer movement test only"
             if not frameConnection then
-                frameConnection=RunService.PreAnimation:Connect(function()
-                    local ok,err=pcall(update)
+                frameConnection=RunService.PreSimulation:Connect(function(dt)
+                    local ok,err=pcall(update,dt)
                     if not ok then
-                        restoreAll()
-                        state.moonwalkStatus="Animation unavailable | see runtime diagnostics"
+                        restore()
+                        state.moonwalkStatus="ERROR | see runtime diagnostics"
                         runtimeLog.record("moonwalk",err)
                     end
                 end)
             end
         else
             if frameConnection then frameConnection:Disconnect();frameConnection=nil end
-            restoreAll()
-            state.moonwalkStatus="OFF | native animation restored"
+            restore()
+            state.moonwalkStatus="OFF | native rotation restored"
         end
     end
 end)()
@@ -2024,11 +2000,11 @@ Tabs.Movement:AddButton({
     end
 })
 registerToggle(Tabs.Movement,
-    "MoonwalkAD","Moonwalk A/D",
-    "Reverse compatible walk/run playback while holding A or D; cosmetic only.",
+    "MoonwalkAD","Moonwalk DBD",
+    "Face opposite native movement while holding A or D; developer test only.",
     "moonwalk",setMoonwalk)
 local moonwalkStatusBox=Tabs.Movement:AddParagraph({
-    Title="MOONWALK STATUS",Content="OFF | native animation"
+    Title="MOONWALK STATUS",Content="OFF | native rotation"
 })
 
 
@@ -2702,4 +2678,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V5.3.3] Simple ESP and Moonwalk diagnostics; Roblox runtime not tested.")
+print("[XandMe V5.3.4] Directional moonwalk developer test; Roblox runtime not tested.")
