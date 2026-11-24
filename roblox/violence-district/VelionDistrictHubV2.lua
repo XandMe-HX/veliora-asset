@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V5.0 - XANDME NATIVE UI
+    VELION DISTRICT HUB V5.1 - NATIVE UI POLISH
     For Roblox Violence District - client-side utility module.
     Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -215,6 +215,7 @@ create("UIStroke",alert,{
 -- No external loader, library theme, or global input hooks.
 local Native,Window=(function()
     local ui={Options={}}
+    local animationDuration=.14
     local C={
         black=Color3.fromRGB(7,7,7),sidebar=Color3.fromRGB(12,12,12),
         row=Color3.fromRGB(21,21,21),button=Color3.fromRGB(32,32,32),
@@ -231,7 +232,7 @@ local Native,Window=(function()
     local function text(parent,caption,size,medium,color)
         return create("TextLabel",parent,{
             BackgroundTransparency=1,Text=caption,TextColor3=color or C.text,
-            TextSize=size,Font=medium and Enum.Font.GothamMedium or Enum.Font.Gotham,
+            TextSize=size,Font=medium and Enum.Font.BuilderSansMedium or Enum.Font.BuilderSans,
             TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Center,
             TextWrapped=true,BorderSizePixel=0,
             Size=UDim2.new(1,0,0,0),AutomaticSize=Enum.AutomaticSize.Y
@@ -239,7 +240,7 @@ local Native,Window=(function()
     end
     local function btn(parent,caption,width,height)
         local b=create("TextButton",parent,{
-            Text=caption,TextSize=12,Font=Enum.Font.GothamMedium,TextColor3=C.text,
+            Text=caption,TextSize=12,Font=Enum.Font.BuilderSansMedium,TextColor3=C.text,
             BackgroundColor3=C.button,BackgroundTransparency=0,AutoButtonColor=true,
             BorderSizePixel=0,Size=UDim2.fromOffset(width,height)
         })
@@ -276,10 +277,10 @@ local Native,Window=(function()
     })
     round(root,12);stroke(root)
     create("UISizeConstraint",root,{MaxSize=Vector2.new(810,570)})
-    local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0})
+    local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0,Active=true})
     local brand=text(header,"XandMe.",26,true)
     brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-120,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
-    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.0",10,false,C.muted)
+    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.1",10,false,C.muted)
     subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-120,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
     local close=btn(header,"−",34,30)
     close.AnchorPoint=Vector2.new(1,.5);close.Position=UDim2.new(1,-12,.5,0)
@@ -309,15 +310,54 @@ local Native,Window=(function()
     end)
     local Methods={}
     local drag=nil
+    local windowDrag=nil
+    local searchRows={}
+    local searchBox=nil
+    local function clampWindowPosition(point)
+        local vp=screen.AbsoluteSize
+        local half=root.AbsoluteSize/2
+        if vp.X<=0 or vp.Y<=0 then return end
+        local x=math.clamp(point.X,math.min(half.X,vp.X/2),math.max(vp.X-half.X,vp.X/2))
+        local y=math.clamp(point.Y,math.min(half.Y,vp.Y/2),math.max(vp.Y-half.Y,vp.Y/2))
+        root.Position=UDim2.fromOffset(x,y)
+    end
+    function window:ResetPosition()
+        windowDrag=nil;root.Position=UDim2.fromScale(.5,.5)
+    end
+    connect(screen:GetPropertyChangedSignal("AbsoluteSize"),function() window:ResetPosition() end)
+    connect(root:GetPropertyChangedSignal("Visible"),function() if not root.Visible then windowDrag=nil;drag=nil end end)
+    connect(header.InputBegan,function(input)
+        if not state.alive or not root.Visible or windowDrag then return end
+        if input.UserInputType~=Enum.UserInputType.MouseButton1 and input.UserInputType~=Enum.UserInputType.Touch then return end
+        local closePos,closeSize=close.AbsolutePosition,close.AbsoluteSize
+        if input.Position.X>=closePos.X and input.Position.X<=closePos.X+closeSize.X and input.Position.Y>=closePos.Y and input.Position.Y<=closePos.Y+closeSize.Y then return end
+        windowDrag={input=input,start=Vector2.new(input.Position.X,input.Position.Y),center=root.AbsolutePosition-screen.AbsolutePosition+root.AbsoluteSize/2}
+    end)
     connect(UserInputService.InputChanged,function(input)
-        if not drag or not state.alive then return end
+        if not state.alive then return end
+        if windowDrag then
+            local held=windowDrag.input
+            if input==held or (held.UserInputType==Enum.UserInputType.MouseButton1 and input.UserInputType==Enum.UserInputType.MouseMovement) then
+                local point=Vector2.new(input.Position.X,input.Position.Y)
+                clampWindowPosition(windowDrag.center+point-windowDrag.start)
+            end
+        end
+        if not drag then return end
         if input==drag.input or (drag.input.UserInputType==Enum.UserInputType.MouseButton1 and input.UserInputType==Enum.UserInputType.MouseMovement) then
             drag.update(input.Position.X)
         end
     end)
     connect(UserInputService.InputEnded,function(input)
         if drag and (input==drag.input or input.UserInputType==Enum.UserInputType.MouseButton1) then drag=nil end
+        if windowDrag and (input==windowDrag.input or input.UserInputType==Enum.UserInputType.MouseButton1) then windowDrag=nil end
     end)
+    local function applySettingsSearch()
+        if not searchBox then return end
+        local query=searchBox.Text:lower():match("^%s*(.-)%s*$") or ""
+        for _,entry in ipairs(searchRows) do
+            entry.frame.Visible=query=="" or string.find(entry.title:lower(),query,1,true)~=nil
+        end
+    end
     local function newRow(container,title,desc,rightWidth)
         local frame=create("Frame",container,{
             BackgroundColor3=C.row,BackgroundTransparency=0,BorderSizePixel=0,
@@ -333,6 +373,10 @@ local Native,Window=(function()
         local heading=text(left,title,13,true);heading.LayoutOrder=1
         local detail=text(left,desc or "",11,false,C.muted);detail.LayoutOrder=2;detail.Visible=detail.Text~=""
         local result={Frame=frame}
+        if container.Name=="Settings" then
+            searchRows[#searchRows+1]={frame=frame,title=title.." "..(desc or "")}
+            applySettingsSearch()
+        end
         function result:SetDesc(value)
             detail.Text=tostring(value or "")
             detail.Visible=detail.Text~=""
@@ -372,13 +416,20 @@ local Native,Window=(function()
         function obj:SetBindText(value) key.Text=value or "Unbound" end
         function obj:SetBindCallback(fn) self._bind=fn end
         bindClick(key,id.." shortcut",function() if obj._bind then obj._bind() end end)
-        local function paint()
+        local toggleTween=nil
+        local function paint(animate)
             toggle.Text=obj.Value and "ON" or "OFF"
-            toggle.BackgroundColor3=obj.Value and C.white or C.button
-            toggle.TextColor3=obj.Value and C.black or C.muted
+            local goal={BackgroundColor3=obj.Value and C.white or C.button,TextColor3=obj.Value and C.black or C.muted}
+            if toggleTween then toggleTween:Cancel();toggleTween=nil end
+            if animate then
+                toggleTween=TweenService:Create(toggle,TweenInfo.new(animationDuration,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),goal)
+                toggleTween:Play()
+            else
+                toggle.BackgroundColor3=goal.BackgroundColor3;toggle.TextColor3=goal.TextColor3
+            end
         end
         function obj:SetValue(value)
-            self.Value=value==true;paint();safe(id,cfg.Callback,self.Value)
+            self.Value=value==true;paint(true);safe(id,cfg.Callback,self.Value)
         end
         bindClick(toggle,id,function() obj:SetValue(not obj.Value) end)
         paint();ui.Options[id]=obj;self.lastToggle=obj
@@ -468,7 +519,7 @@ local Native,Window=(function()
         list(chips,5,Enum.FillDirection.Horizontal)
         local hex=create("TextBox",panel,{
             Size=UDim2.new(1,0,0,30),BackgroundColor3=C.button,TextColor3=C.text,
-            Font=Enum.Font.Gotham,TextSize=12,ClearTextOnFocus=false,
+            Font=Enum.Font.BuilderSans,TextSize=12,ClearTextOnFocus=false,
             PlaceholderText="#RRGGBB",Text="",BorderSizePixel=0
         })
         round(hex,5)
@@ -507,6 +558,15 @@ local Native,Window=(function()
         })
         pad(page,11);list(page,8)
         local heading=text(page,cfg.Title,23,true);heading.Size=UDim2.new(1,0,0,36);heading.AutomaticSize=Enum.AutomaticSize.None
+        if cfg.Title=="Settings" then
+            searchBox=create("TextBox",page,{
+                Name="SettingsSearch",Size=UDim2.new(1,0,0,34),BackgroundColor3=C.row,BackgroundTransparency=0,
+                Text="",PlaceholderText="Search settings...",PlaceholderColor3=C.muted,TextColor3=C.text,
+                Font=Enum.Font.BuilderSans,TextSize=14,ClearTextOnFocus=false,BorderSizePixel=0
+            })
+            round(searchBox,7);stroke(searchBox)
+            connect(searchBox:GetPropertyChangedSignal("Text"),applySettingsSearch)
+        end
         local tab=setmetatable({Container=page,Nav=nav},{__index=Methods})
         self.Tabs[index]=tab
         bindClick(nav,"navigation",function() window:SelectTab(index) end)
@@ -521,9 +581,13 @@ local Native,Window=(function()
         end
     end
     local notice=nil
+    local noticeTween=nil
     function ui:Notify(cfg)
+        if not state.alive then return end
+        if noticeTween then noticeTween:Cancel();noticeTween=nil end
         if notice then notice:Destroy() end
-        local toast=create("Frame",screen,{
+        local toast=create("CanvasGroup",screen,{
+            Name="XandMeToast",GroupTransparency=1,
             AnchorPoint=Vector2.new(1,1),Position=UDim2.new(1,-12,1,-12),
             Size=UDim2.new(.85,0,0,0),AutomaticSize=Enum.AutomaticSize.Y,
             BackgroundColor3=C.black,BorderSizePixel=0
@@ -532,9 +596,22 @@ local Native,Window=(function()
         create("UISizeConstraint",toast,{MaxSize=Vector2.new(340,1000)})
         text(toast,cfg.Title or "XandMe",13,true)
         text(toast,cfg.Content or "",11,false,C.muted)
-        task.delay(cfg.Duration or 3,function() if toast.Parent then toast:Destroy() end;if notice==toast then notice=nil end end)
+        noticeTween=TweenService:Create(toast,TweenInfo.new(animationDuration),{GroupTransparency=0});noticeTween:Play()
+        task.delay(cfg.Duration or 3,function()
+            if not state.alive or notice~=toast or not toast.Parent then return end
+            if noticeTween then noticeTween:Cancel() end
+            noticeTween=TweenService:Create(toast,TweenInfo.new(animationDuration),{GroupTransparency=1});noticeTween:Play()
+            task.delay(animationDuration,function()
+                if notice==toast then notice=nil;noticeTween=nil end
+                if toast.Parent then toast:Destroy() end
+            end)
+        end)
     end
-    function ui:Destroy() drag=nil;screen:Destroy() end
+    function ui:Destroy()
+        drag=nil;windowDrag=nil
+        if noticeTween then noticeTween:Cancel();noticeTween=nil end
+        table.clear(searchRows);screen:Destroy()
+    end
     return ui,window
 end)()
 local Tabs={
@@ -1849,6 +1926,7 @@ Tabs.Visual:AddButton({
 
 -- Fixed dark theme and native menu shortcut. Gameplay preferences never auto-enable.
 local glassModeStatus="Native opaque monochrome"
+Tabs.Settings:AddButton({Title="Reset Window Position",Description="Return the draggable interface to the center of the viewport.",ButtonText="RESET",Callback=function() Window:ResetPosition() end})
 Tabs.Settings:AddParagraph({
     Title="XANDME / MONOCHROME",
     Content="Right Ctrl opens or closes the menu. Features start OFF and can be enabled individually. Click Unbound on a feature row to assign its key."
@@ -2415,4 +2493,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V5.0] Native monochrome interface; Roblox runtime not tested.")
+print("[XandMe V5.1] Native UI polish; Roblox runtime not tested.")
