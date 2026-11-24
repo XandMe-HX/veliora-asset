@@ -1,11 +1,11 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V5.3 - CAMERA STATUS DIAGNOSTICS
+    VELION DISTRICT HUB V5.3.7 - ORIGINAL USER CONTROLLERS
     For Roblox Violence District - client-side utility module.
     Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
     Existing observational features remain unverified; no game security bypass.
-    Manual skill-check and movement practice only.
+    User-supplied controllers; runtime compatibility is unverified.
 ]]
 
 local Players = game:GetService("Players")
@@ -30,10 +30,10 @@ for _,name in ipairs({"VelionDistrictHub","VelionDistrictHubV2"}) do
 end
 
 local state = {
-    alive=true, playerESP=false, objectiveESP=false,
+    alive=true, playerESP=false, objectiveESP=false, npcESP=false,
     fullbright=false, lightIntensity=100, noFog=false, noClip=false,
-    speed=false, speedValue=24, fov=70,
-    customFov=false, fovMode="Preserve Dynamic", fovSmooth=0.18,
+    speed=false, speedValue=24, fov=114,
+    customFov=false, fovSmoothness=10,fovTurnBoost=5,fovStep=3,fovHotkeys=false,
     smoothCamera=false, cameraTurnTime=0.08,
     smoothZoom=false, cameraZoomTime=0.18,
     moonwalk=false, moonwalkSteer=.28,
@@ -46,7 +46,9 @@ local state = {
     playerNames=false, playerDistance=false,
     playerMask=false, chaseStatus=false, knockedStatus=false, hookedStatus=false,
     playerHighlight=false, objectHighlight=false, highlightMode="Outline", nextKiller=false, skillMonitor=false,
-    autoSkillCheck=false, inputStatus="No action attempted",
+    autoSkillCheck=false, whiteZoneOffset=109, skillQAStatus="OFF",
+    autoParry=false, parryRange=14,parryClosing=12,parryPanic=6,parryDebounce=.4,parryQAStatus="OFF",
+    inputStatus="User-supplied input controller",
     generatorESP=false, palletESP=false, windowESP=false, hookESP=false,
     gateESP=false, generatorProgressESP=false, espDistance=650,
     identifiedObjectives=0, unknownRoles=0,
@@ -57,10 +59,10 @@ local state = {
     abilitySignalsObserved=0, abilityNotificationCount=0,
     lastRoleTransition="None detected",
     roleTransitions=0, trackedPlayers=0,
-    maxWorldLabels=22, maxWorldHighlights=20, objectLabels=false,
+    maxWorldLabels=22, maxWorldHighlights=20, objectLabels=false, objectNames=true,
     scanCandidates=0, scanScanned=0, scanDurationMs=0,
     visibleLabels=0, visibleHighlights=0, fps=60,
-    highlightBudgetAvailable=20,
+    highlightBudgetAvailable=20, objectiveOrder=0, npcFound=0, npcVisible=0,
 }
 local palette = {
     bg=Color3.fromRGB(26,28,27),
@@ -289,11 +291,15 @@ local Native,Window=(function()
     create("UISizeConstraint",root,{MaxSize=Vector2.new(810,570)})
     local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0,Active=true})
     local brand=text(header,"XandMe.",26,true)
-    brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-120,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
-    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3",10,false,C.muted)
-    subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-120,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
-    local close=btn(header,"−",34,30)
+    brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-144,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
+    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3.7",10,false,C.muted)
+    subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-144,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
+    local minimize=btn(header,"−",34,30)
+    minimize.AnchorPoint=Vector2.new(1,.5);minimize.Position=UDim2.new(1,-78,.5,0)
+    local close=btn(header,"Close",60,30)
     close.AnchorPoint=Vector2.new(1,.5);close.Position=UDim2.new(1,-12,.5,0)
+    close.BackgroundColor3=Color3.fromRGB(82,31,36)
+    close.TextColor3=Color3.fromRGB(255,230,230)
     create("Frame",root,{Position=UDim2.fromOffset(0,62),Size=UDim2.new(1,0,0,1),BackgroundColor3=C.border,BorderSizePixel=0})
     local sidebar=create("ScrollingFrame",root,{
         Name="Navigation",Position=UDim2.fromOffset(0,63),Size=UDim2.new(.24,0,1,-63),
@@ -312,7 +318,12 @@ local Native,Window=(function()
         self.Minimized=not self.Minimized
         root.Visible=not self.Minimized
     end
-    bindClick(close,"close",function() window:Minimize() end)
+    function window:Close()
+        local cleanup=environment.VelionVDCleanup
+        if type(cleanup)=="function" then cleanup() end
+    end
+    bindClick(minimize,"minimize",function() window:Minimize() end)
+    bindClick(close,"unload",function() window:Close() end)
     connect(UserInputService.InputBegan,function(input)
         if state.alive and input.KeyCode==Enum.KeyCode.RightControl and not UserInputService:GetFocusedTextBox() then
             window:Minimize()
@@ -339,8 +350,11 @@ local Native,Window=(function()
     connect(header.InputBegan,function(input)
         if not state.alive or not root.Visible or windowDrag then return end
         if input.UserInputType~=Enum.UserInputType.MouseButton1 and input.UserInputType~=Enum.UserInputType.Touch then return end
-        local closePos,closeSize=close.AbsolutePosition,close.AbsoluteSize
-        if input.Position.X>=closePos.X and input.Position.X<=closePos.X+closeSize.X and input.Position.Y>=closePos.Y and input.Position.Y<=closePos.Y+closeSize.Y then return end
+        for _,control in ipairs({minimize,close}) do
+            local pos,size=control.AbsolutePosition,control.AbsoluteSize
+            if input.Position.X>=pos.X and input.Position.X<=pos.X+size.X
+                and input.Position.Y>=pos.Y and input.Position.Y<=pos.Y+size.Y then return end
+        end
         windowDrag={input=input,start=Vector2.new(input.Position.X,input.Position.Y),center=root.AbsolutePosition-screen.AbsolutePosition+root.AbsoluteSize/2}
     end)
     connect(UserInputService.InputChanged,function(input)
@@ -863,24 +877,28 @@ local function removePlayerVisual(other)
     playerVisuals[other]=nil
 end
 local function ensurePlayerVisual(other)
-    if other==player or not state.playerESP then
+    if other==player then removePlayerVisual(other);return end
+    local isNPC=other:IsA("Model")
+    if isNPC then
+        if not state.npcESP or not other:IsDescendantOf(Workspace)
+            or Players:GetPlayerFromCharacter(other)
+            or not (other:FindFirstChildOfClass("Humanoid") or other:FindFirstChildOfClass("AnimationController")) then
+            removePlayerVisual(other);return
+        end
+    elseif not state.playerESP then
         removePlayerVisual(other);return
     end
-    local character=other.Character
-    local head=character and character:FindFirstChild("Head")
-    if not head then
+    local character=isNPC and other or other.Character
+    local head=character and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
+        or character.PrimaryPart or character:FindFirstChildWhichIsA("BasePart",true))
+    if not head or not head:IsA("BasePart") then
         removePlayerVisual(other);return
     end
-    local role,color=roleOf(other)
-    if (role=="Killer" and not state.killerESP) or
-        (role=="Survivor" and not state.survivorESP) or
-        (role=="Unknown" and not state.unknownESP) then
-        removePlayerVisual(other)
-        return
-    end
+    local role,color="NPC",espColors.Unknown
+    if not isNPC then role,color=roleOf(other) end
     local root=player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-    local targetRoot=character:FindFirstChild("HumanoidRootPart")
-    local distance=(root and targetRoot)
+    local targetRoot=character:FindFirstChild("HumanoidRootPart") or head
+    local distance=(root and root:IsA("BasePart") and targetRoot:IsA("BasePart"))
         and math.floor((root.Position-targetRoot.Position).Magnitude) or nil
     if distance and distance>state.espDistance then
         removePlayerVisual(other)
@@ -892,14 +910,9 @@ local function ensurePlayerVisual(other)
         existing=nil
     end
     if not existing then
-        local highlight=create("Highlight",Workspace,{
-            Name="VelionVDPlayerOutline",Adornee=character,
-            DepthMode=Enum.HighlightDepthMode.AlwaysOnTop,
-            FillTransparency=.82,OutlineTransparency=0
-        })
         local billboard=create("BillboardGui",playerGui,{
             Name="VelionVDPlayerTag",Adornee=head,
-            AlwaysOnTop=true,Size=UDim2.fromOffset(205,62),
+            AlwaysOnTop=not isNPC,Size=UDim2.fromOffset(205,62),
             StudsOffsetWorldSpace=Vector3.new(0,2.5,0),
             MaxDistance=650
         })
@@ -910,7 +923,7 @@ local function ensurePlayerVisual(other)
         pointer.TextXAlignment=Enum.TextXAlignment.Center
         pointer.TextStrokeTransparency=.2
         pointer.Visible=false
-        existing={character=character,highlight=highlight,
+        existing={character=character,highlight=nil,
             billboard=billboard,text=textLabel,pointer=pointer}
         playerVisuals[other]=existing
     end
@@ -925,7 +938,7 @@ local function ensurePlayerVisual(other)
     elseif isChased and state.chaseStatus then color=espColors.Chased end
     local selectedKiller=gameValue(other,"SelectedKiller")
     local nick=(role=="Killer" and selectedKiller)
-        and tostring(selectedKiller) or other.DisplayName
+        and tostring(selectedKiller) or (isNPC and other.Name or other.DisplayName)
     local mask=(state.playerMask and role=="Killer") and maskLabel(other) or nil
     local status=(isHooked and state.hookedStatus and "HOOKED")
         or (isKnocked and state.knockedStatus and "KNOCKED")
@@ -935,15 +948,25 @@ local function ensurePlayerVisual(other)
         local item=character:FindFirstChildWhichIsA("Tool")
         if item then heldItem=item.Name end
     end
-    highlightStyle(existing.highlight,color)
-    existing.highlight.Enabled=state.playerHighlight and
-        (not distance or distance<=state.espDistance)
+    if state.playerESP or (isNPC and state.npcESP) then
+        if not existing.highlight then
+            existing.highlight=create("Highlight",Workspace,{
+                Name="VelionVDPlayerOutline",Adornee=character,
+                DepthMode=isNPC and Enum.HighlightDepthMode.Occluded
+                    or Enum.HighlightDepthMode.AlwaysOnTop,
+                FillTransparency=.82,OutlineTransparency=0
+            })
+        end
+        highlightStyle(existing.highlight,color)
+    elseif existing.highlight then
+        existing.highlight:Destroy()
+        existing.highlight=nil
+    end
+    if existing.billboard.Adornee~=head then existing.billboard.Adornee=head end
     existing.billboard.MaxDistance=state.espDistance
-    existing.billboard.Enabled=state.playerNames or status~=nil
-        or heldItem~=nil or (state.playerMask and mask~=nil)
-        or (state.playerDistance and distance~=nil)
+    existing.billboard.Enabled=true
     existing.text.TextColor3=color
-    existing.text.Text=(state.playerNames and (nick.." ["..role.."]") or "")
+    existing.text.Text=nick
         ..(state.playerDistance and distance and
             ("\n"..distance.." studs") or "")
         ..(mask and ("\nMask: "..mask) or "")
@@ -967,12 +990,52 @@ local function ensurePlayerVisual(other)
                 (center.Y-60)/math.max(math.abs(direction.Y),1))
             local point=center+direction*math.clamp(maxScale,0,1)
             existing.pointer.Position=UDim2.fromOffset(point.X-92,point.Y-21)
-            existing.pointer.Text=nick.." ("..role..")"
+            existing.pointer.Text=nick
                 ..(distance and ("\n"..distance.." studs") or "")
             existing.pointer.TextColor3=color
         end
     end
 end
+
+-- Untagged rig discovery is available in Studio for local developer testing.
+-- Published experiences use explicit developer tags.
+local npcDebug=(function()
+    local cached: {[Model]: boolean}={}
+    local lastScan=-math.huge
+    local collection=game:GetService("CollectionService")
+    local function valid(model: Instance): boolean
+        if not model:IsA("Model") or not model:IsDescendantOf(Workspace) then return false end
+        if Players:GetPlayerFromCharacter(model) then return false end
+        if not (model:FindFirstChildOfClass("Humanoid") or model:FindFirstChildOfClass("AnimationController")) then return false end
+        local node: Instance?=model
+        while node and node~=Workspace do
+            local name=node.Name:lower()
+            if name:find("preview",1,true) or name:find("fakecharacter",1,true) or name:find("lobby",1,true) then return false end
+            node=node.Parent
+        end
+        return true
+    end
+    local function collect(now: number)
+        if now-lastScan>=1.5 then
+            lastScan=now
+            table.clear(cached)
+            for _,model in ipairs(collection:GetTagged("VelionDebugNPC")) do
+                if valid(model) then cached[model]=true end
+            end
+            if RunService:IsStudio() then
+                for _,node in ipairs(Workspace:GetDescendants()) do
+                    if node:IsA("Humanoid") or node:IsA("AnimationController") then
+                        local model=node.Parent
+                        if model and valid(model) then cached[model]=true end
+                    end
+                end
+            end
+        end
+        for model in pairs(cached) do if not valid(model) then cached[model]=nil end end
+        return cached
+    end
+    return {collect=collect,reset=function() table.clear(cached);lastScan=-math.huge end}
+end)()
 
 -- WORLD ESP V2: map-only discovery, lazy rendering and strict visibility caps.
 -- High-instance-count lobby objects, cosmetic preview models and fake
@@ -1146,16 +1209,17 @@ local function considerObjective(candidate: Instance)
     local obj,part,kind=getObjective(candidate)
     if not obj or not part or not kind then return end
     if objectiveVisuals[obj] then return end
+    state.objectiveOrder+=1
     objectiveVisuals[obj]={
-        obj=obj,part=part,kind=kind,gui=nil,
+        obj=obj,part=part,kind=kind,gui=nil,order=state.objectiveOrder,
         highlight=nil,text=nil,lastVisible=0,
         progressRef=nil,progressMaxRef=nil
     }
     state.identifiedObjectives+=1
     if kind.key=="item" then state.worldItemsFound+=1 end
 end
-local function makeObjectiveNodes(rec)
-    if not rec.gui then
+local function makeObjectiveNodes(rec,showLabel,showOutline)
+    if showLabel and not rec.gui then
         local board=create("BillboardGui",playerGui,{
             Name="VelionVDObjective",Adornee=rec.part,
             Size=UDim2.fromOffset(160,30),AlwaysOnTop=true,
@@ -1169,7 +1233,7 @@ local function makeObjectiveNodes(rec)
         rec.gui=board
         rec.text=tag
     end
-    if state.objectHighlight and not rec.highlight then
+    if showOutline and not rec.highlight then
         rec.highlight=create("Highlight",Workspace,{
             Name="VelionVDObjectiveOutline",Adornee=rec.obj,
             Enabled=false,DepthMode=Enum.HighlightDepthMode.AlwaysOnTop,
@@ -1244,47 +1308,50 @@ end
 
 local function refreshObjectiveVisibility()
     local now=os.clock()
-    if now-lastObjectiveRefresh<.3 then return end
+    if now-lastObjectiveRefresh<.25 then return end
     lastObjectiveRefresh=now
-    local cam=Workspace.CurrentCamera
     local root=player.Character and
         player.Character:FindFirstChild("HumanoidRootPart")
     local candidates={}
     local cacheCount=0
     for obj,rec in pairs(objectiveVisuals) do
-        if not obj.Parent or not rec.part.Parent or not inScope(obj) then
+        if not obj.Parent or not inScope(obj) then
             removeObjectiveRecord(obj)
         else
+            -- Streaming may replace a model's original anchor.
+            if not rec.part.Parent or not rec.part:IsDescendantOf(Workspace) then
+                local _,replacement=getObjective(obj)
+                if replacement then
+                    rec.part=replacement
+                    if rec.gui then rec.gui.Adornee=replacement end
+                else
+                    removeObjectiveRecord(obj)
+                    continue
+                end
+            end
             cacheCount+=1
-            if rec.gui then rec.gui.Enabled=false end
-            if rec.highlight then rec.highlight.Enabled=false end
             if state.objectiveESP and objectiveEnabled(rec.kind.key)
-                and root and cam then
+                and root and root:IsA("BasePart") then
                 local d=(root.Position-rec.part.Position).Magnitude
                 if d<=state.espDistance then
-                    local pos,onScreen=cam:WorldToViewportPoint(
-                        rec.part.Position)
-                    if onScreen and pos.Z>0 then
-                        candidates[#candidates+1]={
-                            rec=rec,dist=d,pos=pos,
-                            priority=d-rec.kind.priority
-                        }
-                    end
+                    candidates[#candidates+1]={
+                        rec=rec,priority=d-rec.kind.priority
+                    }
                 end
             end
         end
     end
+    -- Camera rotation does not change which records occupy the budget.
+    -- Native BillboardGui and Highlight rendering handles the camera frustum.
     table.sort(candidates,function(a,b)
+        if a.priority==b.priority then return a.rec.order<b.rec.order end
         return a.priority<b.priority
     end)
-    local occupied={}
+    local selectedLabels,selectedHighlights={},{}
     local labels,highlights=0,0
-    -- Share a conservative Highlight limit with active Player ESP.
     local playerHighlights=0
     for _,data in pairs(playerVisuals) do
-        if data.highlight and data.highlight.Enabled then
-            playerHighlights+=1
-        end
+        if data.highlight then playerHighlights+=1 end
     end
     local safeHighlightLimit=math.min(state.maxWorldHighlights,
         math.max(0,28-playerHighlights))
@@ -1292,16 +1359,34 @@ local function refreshObjectiveVisibility()
     state.progressUnknown=0
     for _,entry in ipairs(candidates) do
         local rec=entry.rec
-        local cell=math.floor(entry.pos.X/125)..":"..
-            math.floor(entry.pos.Y/64)
-        local showLabel=state.objectLabels
-            and labels<state.maxWorldLabels and not occupied[cell]
-        local showOutline=state.objectHighlight
-            and highlights<safeHighlightLimit
+        if state.objectLabels and labels<state.maxWorldLabels then
+            selectedLabels[rec]=true
+            labels+=1
+        end
+        if state.objectHighlight and highlights<safeHighlightLimit then
+            selectedHighlights[rec]=true
+            highlights+=1
+        end
+    end
+    -- Release unselected slots before creating replacements.
+    -- Disabled Highlight instances still reserve engine slots.
+    for _,rec in pairs(objectiveVisuals) do
+        if rec.highlight and not selectedHighlights[rec] then
+            rec.highlight:Destroy()
+            rec.highlight=nil
+        end
+        if rec.gui and not selectedLabels[rec] and rec.gui.Enabled then
+            rec.gui.Enabled=false
+        end
+    end
+    for _,entry in ipairs(candidates) do
+        local rec=entry.rec
+        local showLabel=selectedLabels[rec]==true
+        local showOutline=selectedHighlights[rec]==true
         if showLabel or showOutline then
-            makeObjectiveNodes(rec)
+            makeObjectiveNodes(rec,showLabel,showOutline)
             local color=categoryColor(rec.kind.key)
-            if rec.text then
+            if showLabel and rec.text then
                 rec.text.TextColor3=color
                 if rec.kind.key=="generator" and state.generatorProgressESP then
                     rec.text.Text=generatorProgress(rec)
@@ -1313,24 +1398,20 @@ local function refreshObjectiveVisibility()
             end
             if rec.gui then
                 rec.gui.MaxDistance=state.espDistance
-                rec.gui.Enabled=showLabel
+                if rec.gui.Enabled~=showLabel then rec.gui.Enabled=showLabel end
             end
             if rec.highlight then
                 highlightStyle(rec.highlight,color)
-                rec.highlight.Enabled=showOutline
+                if not rec.highlight.Enabled then rec.highlight.Enabled=true end
             end
-            if showLabel then
-                occupied[cell]=true;labels+=1
-            end
-            if showOutline then highlights+=1 end
             rec.lastVisible=now
         end
     end
-    -- Prune only inactive visuals; retain metadata so spawning hundreds of
-    -- objects won't spawn hundreds of GUI instances.
     for _,rec in pairs(objectiveVisuals) do
-        if rec.gui and now-rec.lastVisible>5 then
-            destroyObjectiveNodes(rec)
+        if rec.gui and not selectedLabels[rec] and now-rec.lastVisible>5 then
+            rec.gui:Destroy()
+            rec.gui=nil
+            rec.text=nil
         end
     end
     state.scanCandidates=cacheCount
@@ -1454,10 +1535,8 @@ local cameraController=(function()
     local beforeBinding="VelionCameraBefore_"..suffix
     local afterBinding="VelionCameraComfort_"..suffix
     local lensCamera: Camera?=nil
-    local reference=70
-    local native=70
-    local applied: number?=nil
-    local filtered=70
+    local filtered=state.fov
+    local lastCamLook: Vector3?=nil
     local lensBound=false
     local poseBound=false
     local poseCamera: Camera?=nil
@@ -1480,31 +1559,43 @@ local cameraController=(function()
         return true
     end
     local function restoreLens()
-        if lensCamera and applied~=nil and math.abs(lensCamera.FieldOfView-applied)<0.02 then
-            lensCamera.FieldOfView=native
-        end
+        if lensCamera then lensCamera.FieldOfView=70 end
         lensCamera=nil
-        applied=nil
+        lastCamLook=nil
     end
     local function lensStep(dt)
-        if not state.alive or not state.customFov then return end
+        if not state.alive or game.GameId~=6739698191 then return end
         local cam=Workspace.CurrentCamera
-        if not eligible(cam) then restoreLens(); return end
+        if not cam then return end
         if lensCamera~=cam then
             restoreLens()
             lensCamera=cam
-            reference=cam.FieldOfView
-            native=reference
-            filtered=reference
         end
-        local observed=cam.FieldOfView
-        if applied==nil or math.abs(observed-applied)>0.02 then native=observed end
-        local offset=state.fovMode=="Preserve Dynamic" and (native-reference) or 0
-        local target=math.clamp(state.fov+offset,1,120)
-        filtered=math.clamp(filtered+(target-filtered)*alpha(dt,state.fovSmooth),1,120)
-        if math.abs(target-filtered)<0.02 then filtered=target end
-        if math.abs(observed-filtered)>0.02 then cam.FieldOfView=filtered end
-        applied=cam.FieldOfView
+        if not state.customFov then
+            filtered=filtered+(70-filtered)*math.clamp(dt*state.fovSmoothness,0,1)
+            cam.FieldOfView=filtered
+            lastCamLook=cam.CFrame.LookVector
+            if math.abs(filtered-70)<.01 then
+                cam.FieldOfView=70
+                RunService:UnbindFromRenderStep(lensBinding)
+                lensBound=false
+                lensCamera=nil
+                lastCamLook=nil
+            end
+            return
+        end
+        local look=cam.CFrame.LookVector
+        local turnBonus=0
+        if lastCamLook then
+            local dot=math.clamp(lastCamLook:Dot(look),-1,1)
+            local angleDelta=math.acos(dot)
+            local turnSpeed=angleDelta/math.max(dt,.001)
+            turnBonus=math.clamp(turnSpeed*.8,0,state.fovTurnBoost)
+        end
+        lastCamLook=look
+        local targetFov=math.clamp(state.fov+turnBonus,70,120)
+        filtered=filtered+(targetFov-filtered)*math.clamp(dt*state.fovSmoothness,0,1)
+        cam.FieldOfView=filtered
     end
     local function restorePose()
         if poseCamera and rawPose and shownPose and poseCamera.CFrame==shownPose then
@@ -1566,12 +1657,11 @@ local cameraController=(function()
     end
     local function setEnabled(enabled: boolean)
         state.customFov=enabled
-        if enabled and not lensBound then
-            RunService:BindToRenderStep(lensBinding,Enum.RenderPriority.Last.Value+1,lensStep)
+        if enabled and not lensBound and game.GameId==6739698191 then
+            filtered=state.fov
+            lastCamLook=nil
+            RunService:BindToRenderStep(lensBinding,Enum.RenderPriority.Camera.Value+10,lensStep)
             lensBound=true
-        elseif not enabled then
-            if lensBound then RunService:UnbindFromRenderStep(lensBinding); lensBound=false end
-            restoreLens()
         end
     end
     local function refreshPose()
@@ -1606,7 +1696,9 @@ local cameraController=(function()
         state.smoothCamera=false
         state.smoothZoom=false
         refreshPose()
-        setEnabled(false)
+        state.customFov=false
+        if lensBound then RunService:UnbindFromRenderStep(lensBinding);lensBound=false end
+        restoreLens()
     end
     local function status()
         -- Read-only diagnostics. Do not change camera ownership or eligibility.
@@ -1618,8 +1710,9 @@ local cameraController=(function()
         if not state.customFov and not state.smoothCamera and not state.smoothZoom then
             return info.."\nAll camera options OFF. Native camera is unchanged."
         end
-        if not eligible(cam) then
-            return info.."\nNative camera unavailable for these options. Experience camera is respected."
+        if state.customFov and game.GameId~=6739698191 then return info.."\nFOV: unsupported GameId" end
+        if (state.smoothCamera or state.smoothZoom) and not eligible(cam) then
+            return info.."\nRotation/zoom smoothing unavailable for this camera type."
         end
         return info.."\nOptions requested. Runtime behavior has not been verified."
     end
@@ -1644,11 +1737,138 @@ end
 
 
 
--- Manual input practice: never writes Humanoid.Move, AutoRotate, or root CFrame.
-local function setMoonwalk(enabled: boolean)
-    state.moonwalk=enabled
-    state.moonwalkStatus=enabled and "Manual input monitor only; does not animate the character." or "Practice OFF"
-end
+-- User-supplied AlignOrientation moonwalk, integrated with hub lifecycle.
+-- Developer-authorized movement testing only.
+local setMoonwalk=(function()
+    local TURN_RESPONSIVENESS=28
+    local MAX_TORQUE=50000
+    local WIGGLE_SPEED=48
+    local WIGGLE_ANGLE=18
+    local renderName="VD_CleanMoonwalkWiggle_"..player.UserId
+    local bound=false
+    local controlledHumanoid: Humanoid?=nil
+    local controlledRoot: BasePart?=nil
+    local attachment: Attachment?=nil
+    local align: AlignOrientation?=nil
+    local originalAutoRotate: boolean?=nil
+    local wiggleTimer=0
+    local function authorized(): boolean
+        return RunService:IsStudio() or Workspace:GetAttribute("VelionAllowMoonwalk")==true
+    end
+    local function release()
+        wiggleTimer=0
+        if align and align.Parent then align.MaxTorque=0;align.Enabled=false end
+        local hum=controlledHumanoid
+        local original=originalAutoRotate
+        originalAutoRotate=nil
+        if hum and hum.Parent and original~=nil then
+            local ok,err=pcall(function() hum.AutoRotate=original end)
+            if not ok then runtimeLog.record("moonwalk restore",err) end
+        end
+    end
+    local function destroyRig()
+        release()
+        if align then align:Destroy();align=nil end
+        if attachment then attachment:Destroy();attachment=nil end
+        controlledHumanoid=nil
+        controlledRoot=nil
+    end
+    local function setup(hum: Humanoid,root: BasePart)
+        if controlledHumanoid==hum and controlledRoot==root and align and align.Parent==root
+            and attachment and attachment.Parent==root then return end
+        destroyRig()
+        controlledHumanoid=hum
+        controlledRoot=root
+        local att=Instance.new("Attachment")
+        att.Name="MoonwalkAttachment"
+        att.Parent=root
+        attachment=att
+        local orientation=Instance.new("AlignOrientation")
+        orientation.Name="VelionMoonwalkOrientation"
+        orientation.Mode=Enum.OrientationAlignmentMode.OneAttachment
+        orientation.Attachment0=att
+        orientation.RigidityEnabled=false
+        orientation.Responsiveness=TURN_RESPONSIVENESS
+        orientation.MaxTorque=0
+        orientation.Enabled=false
+        orientation.Parent=root
+        align=orientation
+    end
+    local function update(dt: number)
+        if not state.alive or not state.moonwalk then destroyRig();return end
+        if not authorized() then destroyRig();state.moonwalkStatus="LOCKED | developer movement test only";return end
+        local char=player.Character
+        local hum=char and char:FindFirstChildOfClass("Humanoid")
+        local root=hum and hum.RootPart
+        if not hum or hum.Health<=0 or not root or not root:IsDescendantOf(Workspace) then
+            destroyRig();state.moonwalkStatus="WAITING | character";return
+        end
+        if controlledRoot and (controlledRoot~=root or controlledHumanoid~=hum) then destroyRig() end
+        if UserInputService:GetFocusedTextBox() or hum.Sit or hum.PlatformStand or root.Anchored then
+            release();state.moonwalkStatus="READY | input or character unavailable";return
+        end
+        local w=UserInputService:IsKeyDown(Enum.KeyCode.W)
+        local s=UserInputService:IsKeyDown(Enum.KeyCode.S)
+        local a=UserInputService:IsKeyDown(Enum.KeyCode.A)
+        local d=UserInputService:IsKeyDown(Enum.KeyCode.D)
+        local onlyS=s and not w
+        local bothAD=a and d
+        if not onlyS and not bothAD then
+            release();state.moonwalkStatus="READY | hold S or A+D";return
+        end
+        local camera=Workspace.CurrentCamera
+        if not camera then release();state.moonwalkStatus="WAITING | camera";return end
+        local look=camera.CFrame.LookVector
+        local flat=Vector3.new(look.X,0,look.Z)
+        if flat.Magnitude<.001 then release();state.moonwalkStatus="WAITING | horizontal camera direction";return end
+        local flatCamLook=flat.Unit
+        setup(hum,root)
+        local orientation=align
+        if not orientation then return end
+        if originalAutoRotate==nil then originalAutoRotate=hum.AutoRotate end
+        hum.AutoRotate=false
+        orientation.MaxTorque=MAX_TORQUE
+        orientation.Enabled=true
+        if bothAD and not s and not w then
+            hum:Move(-flatCamLook,false)
+        end
+        local moveDir=hum.MoveDirection
+        local horizontal=Vector3.new(moveDir.X,0,moveDir.Z)
+        local baseReverseDir=horizontal.Magnitude>.05 and -horizontal.Unit or flatCamLook
+        local targetCFrame=CFrame.lookAt(Vector3.zero,baseReverseDir)
+        if bothAD then
+            wiggleTimer=(wiggleTimer+math.clamp(dt,0,.1)*WIGGLE_SPEED)% (20*math.pi)
+            local wave=math.sin(wiggleTimer)+(math.sin(wiggleTimer*2.1)*.2)
+            local yawOffset=math.rad(wave*WIGGLE_ANGLE)
+            targetCFrame=targetCFrame*CFrame.Angles(0,yawOffset,0)
+        else
+            wiggleTimer=0
+        end
+        orientation.CFrame=targetCFrame
+        state.moonwalkStatus=bothAD and "ACTIVE | A+D wiggle" or "ACTIVE | S reverse"
+    end
+    return function(enabled: boolean)
+        state.moonwalk=enabled and state.alive
+        if state.moonwalk then
+            state.moonwalkStatus=authorized() and "READY | hold S or A+D" or "LOCKED | developer movement test only"
+            if not bound then
+                RunService:BindToRenderStep(renderName,Enum.RenderPriority.Character.Value+10,function(dt)
+                    local ok,err=pcall(update,dt)
+                    if not ok then
+                        destroyRig()
+                        state.moonwalkStatus="ERROR | see runtime diagnostics"
+                        runtimeLog.record("moonwalk",err)
+                    end
+                end)
+                bound=true
+            end
+        else
+            if bound then RunService:UnbindFromRenderStep(renderName);bound=false end
+            destroyRig()
+            state.moonwalkStatus="OFF | native rotation restored"
+        end
+    end
+end)()
 
 -- =========================================
 -- Native controls.
@@ -1665,116 +1885,94 @@ local statusSkill=Tabs.Main:AddParagraph({
 local statusNext=Tabs.Main:AddParagraph({
     Title="NEXT KILLER (ESTIMATE)",Content="Waiting for lobby"
 })
-registerToggle(Tabs.Players,"PlayerESPMaster","Enable player markers",
-    "Overall player outlines / nametags switch","playerESP",
+-- One toggle per feature. Name labels and outlines are enabled together.
+registerToggle(Tabs.Players,"PlayerESPMaster","Player ESP",
+    "Name + body highlight; automatic role colors","playerESP",
     function(value)
         if not value then
-            for other in pairs(playerVisuals) do
-                removePlayerVisual(other)
+            for subject in pairs(playerVisuals) do
+                if subject:IsA("Player") then removePlayerVisual(subject) end
             end
         end
     end)
-registerToggle(Tabs.Objects,"ObjectESPMaster","Enable map markers",
-    "Show map object highlights and labels","objectiveESP",
+registerToggle(Tabs.Players,"NPCESP","NPC / Bot ESP",
+    "Name + outline; Studio rigs or developer-tagged NPCs","npcESP",
     function(value)
-        if value then startObjectiveScan()
-        else
-            scanGeneration+=1
-            stopSourceWatchers()
-            clearObjectives()
-            state.scanProgress="Disabled"
+        npcDebug.reset()
+        if not value then
+            for subject in pairs(playerVisuals) do
+                if subject:IsA("Model") then removePlayerVisual(subject) end
+            end
+            state.npcFound=0
+            state.npcVisible=0
         end
+    end)
+local npcStatus=Tabs.Players:AddParagraph({
+    Title="NPC STATUS",Content="OFF"
+})
+local function syncObjectESP()
+    local active=state.generatorESP or state.palletESP or state.windowESP
+        or state.hookESP or state.gateESP or state.worldItemsESP
+    local previous=state.objectiveESP
+    state.objectiveESP=active
+    state.objectLabels=active and state.objectNames
+    state.objectHighlight=active
+    state.generatorProgressESP=state.generatorESP
+    if active and not previous then
+        startObjectiveScan()
+    elseif not active then
+        scanGeneration+=1
+        stopSourceWatchers()
+        clearObjectives()
+        state.scanProgress="Disabled"
+    end
+    lastObjectiveRefresh=0
+    refreshObjectiveVisibility()
+end
+registerToggle(Tabs.Objects,"ObjectNames","Object Name ESP",
+    "Show or hide all object labels without disabling outlines","objectNames",
+    function(value)
+        state.objectLabels=state.objectiveESP and value
+        lastObjectiveRefresh=0
         refreshObjectiveVisibility()
     end)
-
--- Player ESP: category and display toggles are independent.
-Tabs.Players:AddParagraph({Title="How to use",Content="Enable player markers, choose a category, then enable names or body highlight. Detection remains unverified."})
-registerToggle(Tabs.Players,"KillerESP","Killer ESP",
-    "Killer character outline + labels","killerESP")
-registerColor(Tabs.Players,"KillerColor","Killer Color","Killer")
-registerToggle(Tabs.Players,"SurvivorESP","Survivor ESP",
-    "Survivor character outline + labels","survivorESP")
-registerColor(Tabs.Players,"SurvivorColor","Survivor Color","Survivor")
-registerToggle(Tabs.Players,"UnknownESP","Unknown Role Markers",
-    "Disabled by default; prevents lobby role false positives","unknownESP")
-registerToggle(Tabs.Players,"SurvivorItems","Survivor Equipped Items",
-    "Show Tool names equipped by visible Survivor characters",
-    "survivorItemsESP")
-registerToggle(Tabs.Players,"PlayerOutline","Body Highlight",
-    "Color or outline the character model","playerHighlight")
-registerToggle(Tabs.Players,"NameESP","Player Names",
-    "Show names and roles","playerNames")
-registerToggle(Tabs.Players,"DistanceESP","Show Distance",
-    "Show stud distance on name tags","playerDistance")
-registerToggle(Tabs.Players,"MaskESP","Killer Mask ESP",
-    "Display replicated mask name","playerMask")
-registerToggle(Tabs.Players,"ChasedESP","Chased Indicator",
-    "Special marker for chased player","chaseStatus")
-registerColor(Tabs.Players,"ChasedColor","Chased Indicator Color","Chased")
-registerToggle(Tabs.Players,"KnockedESP","Knocked Indicator",
-    "Show knocked status","knockedStatus")
-registerColor(Tabs.Players,"KnockedColor","Knocked Indicator Color","Knocked")
-registerToggle(Tabs.Players,"HookedESP","Hooked Indicator",
-    "Show hooked status","hookedStatus")
-registerColor(Tabs.Players,"HookedColor","Hooked Indicator Color","Hooked")
-registerToggle(Tabs.Players,"OffscreenESP","Off-Screen Pointers",
-    "Display directions near screen edges","offscreenESP")
-registerToggle(Tabs.Players,"KillerWarn","Killer Proximity Alert",
-    "Notify when known killer is less than 99 studs","killerAlert")
-
--- Object ESP: separate toggle and color selector per kind.
-Tabs.Objects:AddParagraph({Title="How to use",Content="Enable map markers, select an object category and enable labels or outlines. Click the color square to edit its color."})
-registerToggle(Tabs.Objects,"ObjectOutline","Object Highlight",
-    "Enable object Highlight outlines / fill","objectHighlight",
-    function() refreshObjectiveVisibility() end)
 registerToggle(Tabs.Objects,"GeneratorESP","Generator ESP",
-    "Generator highlight + location","generatorESP",
-    function() refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"GeneratorColor","Generator Color","Generator")
-registerToggle(Tabs.Objects,"GenProgress","Generator Repair %",
-    "Show replicated repair percent","generatorProgressESP",
-    function() refreshObjectiveVisibility() end)
+    "Highlight + name + repair progress when available","generatorESP",syncObjectESP)
 registerToggle(Tabs.Objects,"PalletESP","Pallet ESP",
-    "Both Pallet / Palletwrong","palletESP",
-    function() refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"PalletColor","Pallet Color","Pallet")
+    "Highlight + name","palletESP",syncObjectESP)
 registerToggle(Tabs.Objects,"WindowESP","Window ESP",
-    "Window map objects","windowESP",
-    function() refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"WindowColor","Window Color","Window")
+    "Highlight + name","windowESP",syncObjectESP)
 registerToggle(Tabs.Objects,"HookESP","Hook ESP",
-    "Map Hook models","hookESP",
-    function() refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"HookColor","Hook Color","Hook")
+    "Highlight + name","hookESP",syncObjectESP)
 registerToggle(Tabs.Objects,"GateESP","Gate ESP",
-    "Exit gates","gateESP",
-    function() refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"GateColor","Gate Color","Gate")
-registerToggle(Tabs.Objects,"WorldItems","World Pickup Items",
-    "Show Tool and recognized pickup objects within Map/Interactables",
-    "worldItemsESP",
-    function() lastObjectiveRefresh=0;refreshObjectiveVisibility() end)
-registerColor(Tabs.Objects,"ItemColor","Item Color","Item")
-local itemInfo=Tabs.Objects:AddParagraph({
+    "Highlight + name","gateESP",syncObjectESP)
+registerToggle(Tabs.Objects,"WorldItems","Item ESP",
+    "Highlight + name","worldItemsESP",syncObjectESP)
+local espSettings=Tabs.Settings:AddSection("ESP Settings")
+for _,category in ipairs({"Killer","Survivor","Unknown","Generator","Pallet","Window","Hook","Gate","Item"}) do
+    local colorName=category=="Unknown" and "Neutral / NPC" or category
+    registerColor(espSettings,category.."Color",colorName.." Color",category)
+end
+local itemInfo=espSettings:AddParagraph({
     Title="SURVIVOR ITEMS ESP",
     Content="Replicated world Tools and pickup prompts only. Unreplicated inventories are unavailable."
 })
-Tabs.Objects:AddButton({
+espSettings:AddButton({
     Title="Rescan Map",Description="Refresh Workspace map references",
     Callback=function() startObjectiveScan() end
 })
-local objectStatus=Tabs.Objects:AddParagraph({
+local objectStatus=espSettings:AddParagraph({
     Title="WORLD ESP V2",Content="Waiting for active map..."
 })
-local perfStatus=Tabs.Objects:AddParagraph({
+local perfStatus=espSettings:AddParagraph({
     Title="WORLD ESP DIAGNOSTICS",
     Content="Map status, cache, visible labels, highlights and FPS"
 })
-local progressStatus=Tabs.Objects:AddParagraph({
+local progressStatus=espSettings:AddParagraph({
     Title="GENERATOR PROGRESS",
     Content="Auto detects percentage where possible; ambiguous values show raw."
 })
-local progressDropdown=Tabs.Objects:AddDropdown("GeneratorProgressScale",{
+local progressDropdown=espSettings:AddDropdown("GeneratorProgressScale",{
     Title="Generator Progress Units",
     Description="Auto / percent 0-100 / fraction 0-1 / raw value",
     Values={"Auto","Percent","Fraction","Raw"},Default="Auto",
@@ -1786,10 +1984,7 @@ local progressDropdown=Tabs.Objects:AddDropdown("GeneratorProgressScale",{
     end
 })
 controls.GeneratorProgressScale=progressDropdown
-registerToggle(Tabs.Objects,"ObjectLabels","Object Labels",
-    "Display labels without crowding the screen","objectLabels",
-    function() lastObjectiveRefresh=0;refreshObjectiveVisibility() end)
-registerSlider(Tabs.Objects,"MaxLabels","Maximum Object Labels",
+registerSlider(espSettings,"MaxLabels","Maximum Object Labels",
     "Render nearest prioritized labels; 0 hides labels",
     state.maxWorldLabels,0,40,0,
     function(v)
@@ -1797,7 +1992,7 @@ registerSlider(Tabs.Objects,"MaxLabels","Maximum Object Labels",
         lastObjectiveRefresh=0
         refreshObjectiveVisibility()
     end)
-registerSlider(Tabs.Objects,"MaxHighlights","Maximum Object Highlights",
+registerSlider(espSettings,"MaxHighlights","Maximum Object Highlights",
     "Caps simultaneous highlights to protect FPS (max 26)",
     state.maxWorldHighlights,0,26,0,
     function(v)
@@ -1805,11 +2000,11 @@ registerSlider(Tabs.Objects,"MaxHighlights","Maximum Object Highlights",
         lastObjectiveRefresh=0
         refreshObjectiveVisibility()
     end)
-registerSlider(Tabs.Objects,"ESPRange","ESP Distance",
+registerSlider(espSettings,"ESPRange","ESP Distance",
     "Max object and player visibility range (studs)",
     state.espDistance,100,2000,0,
     function(v) state.espDistance=v;refreshObjectiveVisibility() end)
-local hMode=Tabs.Objects:AddDropdown("HighlightMode",{
+local hMode=espSettings:AddDropdown("HighlightMode",{
     Title="Highlight Mode",
     Description="Choose between outline, fill or both",
     Values={"Outline","Fill","Both"},Default=1,
@@ -1838,12 +2033,233 @@ Tabs.Killer:AddParagraph({
     Content="No server ability packets are captured. Unknown states produce no speculative alerts."
 })
 
+-- User's Auto Generator and Auto Parry algorithms. Hub adapters only expose
+-- original settings and manage enable/disable, connections and cleanup.
+local userActions=(function()
+    local Teams=game:GetService("Teams")
+    local LocalPlayer=player
+    local PlayerGui=playerGui
+    local generatorConn: RBXScriptConnection?=nil
+    local parryConn: RBXScriptConnection?=nil
+    local alreadyHit=false
+    local lastPressTime=0
+    local cachedParryButton=nil
+    local lastScan=0
+    local function pressSkillCheck()
+        local ok,err=pcall(function()
+            local VirtualInputManager=game:GetService("VirtualInputManager")
+            if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
+                local cam=Workspace.CurrentCamera
+                local x=cam and (cam.ViewportSize.X / 2) or 500
+                local y=cam and (cam.ViewportSize.Y / 2) or 300
+                VirtualInputManager:SendTouchEvent(1, 0, x, y)
+                task.wait(0.02)
+                VirtualInputManager:SendTouchEvent(1, 2, x, y)
+            else
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+                task.wait(0.02)
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+            end
+        end)
+        if not ok then runtimeLog.record("Auto Generator",err);state.skillQAStatus="ERROR | input unavailable"
+        else state.skillQAStatus="INPUT SENT" end
+    end
+    local function generatorStep()
+        if not state.alive or not state.autoSkillCheck then return end
+        if game.GameId~=6739698191 then state.skillQAStatus="Unsupported GameId";return end
+        local promptGui=PlayerGui:FindFirstChild("SkillCheckPromptGui")
+        if not promptGui or not promptGui.Enabled then
+            alreadyHit=false
+            state.skillQAStatus="READY | waiting for prompt"
+            return
+        end
+        local check=promptGui:FindFirstChild("Check")
+        if not check or not check.Visible then
+            alreadyHit=false
+            state.skillQAStatus="READY | waiting for check"
+            return
+        end
+        if alreadyHit then return end
+        local line=check:FindFirstChild("Line")
+        local goal=check:FindFirstChild("Goal")
+        if line and goal then
+            local lineRot=line.Rotation % 360
+            local goalRot=goal.Rotation % 360
+            local whiteZoneCenter=(goalRot + state.whiteZoneOffset) % 360
+            local diff=(lineRot - whiteZoneCenter) % 360
+            if diff >= 0 and diff <= 8 then
+                alreadyHit=true
+                pressSkillCheck()
+            end
+        end
+    end
+    local function findParryButton()
+        if os.clock() - lastScan < 3 and cachedParryButton and cachedParryButton.Parent then
+            return cachedParryButton
+        end
+        lastScan=os.clock()
+        for _,desc in ipairs(PlayerGui:GetDescendants()) do
+            if desc:IsA("GuiButton") and desc.Visible then
+                local lowerName=desc.Name:lower()
+                if lowerName:find("parry") or lowerName:find("block") or lowerName:find("dagger") or lowerName:find("counter") then
+                    cachedParryButton=desc
+                    return desc
+                end
+            end
+        end
+        return nil
+    end
+    local function isItemOnCooldown()
+        if os.clock() - lastPressTime < state.parryDebounce then return true end
+        local char=LocalPlayer.Character
+        local tool=char and char:FindFirstChildWhichIsA("Tool")
+        for _,target in ipairs({LocalPlayer,char,tool}) do
+            if target then
+                if target:GetAttribute("ParryCooldown") == true
+                    or target:GetAttribute("OnCooldown") == true
+                    or target:GetAttribute("Cooldown") == true
+                    or (tonumber(target:GetAttribute("Cooldown")) or 0) > 0
+                    or (tonumber(target:GetAttribute("ParryCooldown")) or 0) > 0 then
+                    return true
+                end
+            end
+        end
+        local btn=findParryButton()
+        if btn then
+            if btn.BackgroundTransparency > 0.6 or not btn.Active then return true end
+            for _,child in ipairs(btn:GetDescendants()) do
+                if child:IsA("Frame") and child.Visible then
+                    local cName=child.Name:lower()
+                    if cName:find("cool") or cName:find("cd") or cName:find("overlay") or cName:find("fill") then
+                        if child.Size.Y.Scale > 0.02 or child.Size.X.Scale > 0.02 then return true end
+                    end
+                end
+                if child:IsA("TextLabel") and child.Visible and child.Text ~= "" then
+                    local num=tonumber(child.Text:match("(%d+%.?%d*)"))
+                    if num and num > 0 then return true end
+                end
+            end
+        end
+        return false
+    end
+    local function getKillerCharacter()
+        local killerTeam=Teams:FindFirstChild("Killer")
+        if not killerTeam then return nil end
+        -- API correction only: Team:GetPlayers returns an array, not a Player.
+        local killerPlayer=killerTeam:GetPlayers()[1]
+        return killerPlayer and killerPlayer.Character
+    end
+    local function executeParry()
+        if isItemOnCooldown() then return end
+        lastPressTime=os.clock()
+        local ok,err=pcall(function()
+            local char=LocalPlayer.Character
+            local tool=char and char:FindFirstChildWhichIsA("Tool")
+            if tool then tool:Activate() end
+            local btn=findParryButton()
+            if btn then
+                if type(firesignal) == "function" then
+                    firesignal(btn.MouseButton1Click)
+                    firesignal(btn.Activated)
+                else
+                    local VirtualInputManager=game:GetService("VirtualInputManager")
+                    local pos=btn.AbsolutePosition + (btn.AbsoluteSize / 2)
+                    VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 1)
+                    task.wait(0.02)
+                    VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 1)
+                end
+            else
+                local VirtualInputManager=game:GetService("VirtualInputManager")
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
+                task.wait(0.02)
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
+            end
+        end)
+        if not ok then runtimeLog.record("Auto Parry",err);state.parryQAStatus="ERROR | input unavailable"
+        else state.parryQAStatus="INPUT SENT" end
+    end
+    local function isKillerAttacking(killerChar)
+        local hum=killerChar:FindFirstChildOfClass("Humanoid")
+        local animator=hum and hum:FindFirstChildOfClass("Animator")
+        if animator then
+            for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
+                local animName=(track.Name .. (track.Animation and track.Animation.Name or "")):lower()
+                if animName:find("attack") or animName:find("swing") or animName:find("slash") or animName:find("lunge") or animName:find("hit") then
+                    return true
+                end
+            end
+        end
+        return killerChar:GetAttribute("Attacking") == true or killerChar:GetAttribute("Lunging") == true
+    end
+    local function parryStep()
+        if not state.alive or not state.autoParry then return end
+        if game.GameId~=6739698191 then state.parryQAStatus="Unsupported GameId";return end
+        if isItemOnCooldown() then state.parryQAStatus="COOLDOWN";return end
+        local myChar=LocalPlayer.Character
+        local myRoot=myChar and myChar:FindFirstChild("HumanoidRootPart")
+        if not myRoot then return end
+        local killerChar=getKillerCharacter()
+        local killerRoot=killerChar and killerChar:FindFirstChild("HumanoidRootPart")
+        if not killerRoot then state.parryQAStatus="READY | waiting for Killer";return end
+        local dist=(killerRoot.Position-myRoot.Position).Magnitude
+        if dist > state.parryRange then return end
+        local toMe=(myRoot.Position-killerRoot.Position).Unit
+        local closingSpeed=killerRoot.AssemblyLinearVelocity:Dot(toMe)
+        if dist <= state.parryPanic
+            or (dist <= state.parryRange and isKillerAttacking(killerChar))
+            or (dist <= state.parryClosing and closingSpeed > 18) then
+            executeParry()
+        end
+    end
+    local function guarded(name,fn)
+        local ok,err=pcall(fn)
+        if not ok then runtimeLog.record(name,err) end
+    end
+    local function setGenerator(value: boolean)
+        state.autoSkillCheck=value and state.alive
+        alreadyHit=false
+        if state.autoSkillCheck then
+            state.skillQAStatus="READY"
+            if not generatorConn then generatorConn=RunService.RenderStepped:Connect(function() guarded("Auto Generator",generatorStep) end) end
+        else
+            if generatorConn then generatorConn:Disconnect();generatorConn=nil end
+            state.skillQAStatus="OFF"
+        end
+    end
+    local function setParry(value: boolean)
+        state.autoParry=value and state.alive
+        if state.autoParry then
+            state.parryQAStatus="READY"
+            if not parryConn then parryConn=RunService.Heartbeat:Connect(function() guarded("Auto Parry",parryStep) end) end
+        else
+            if parryConn then parryConn:Disconnect();parryConn=nil end
+            cachedParryButton=nil
+            state.parryQAStatus="OFF"
+        end
+    end
+    return {setGenerator=setGenerator,setParry=setParry,stop=function() setGenerator(false);setParry(false) end}
+end)()
+
 -- Survivor mechanics only where source references are available.
 registerToggle(Tabs.Survivor,"MonitorSkill","Skill Check Monitor",
     "Read Line / Goal rotation from the game UI","skillMonitor")
-Tabs.Survivor:AddParagraph({
-    Title="Manual skill checks",
-    Content="Automatic generator input is not included in this version. Practice manually; game detection is not verified."
+registerToggle(Tabs.Survivor,"AutoGenerator","Auto Generator",
+    "Original white-zone timing controller","autoSkillCheck",userActions.setGenerator)
+registerSlider(Tabs.Survivor,"WhiteZoneOffset","White Zone Offset",
+    "Calibration in degrees; supplied default 109.",
+    state.whiteZoneOffset,90,130,0,function(v) state.whiteZoneOffset=v end)
+registerToggle(Tabs.Survivor,"AutoParry","Auto Parry",
+    "Original attack detection and item cooldown checks","autoParry",userActions.setParry)
+registerSlider(Tabs.Survivor,"ParryRange","Parry Range","Test detection distance (studs).",
+    state.parryRange,6,25,0,function(v) state.parryRange=v end)
+registerSlider(Tabs.Survivor,"ParryClosing","Parry Closing","Test closing distance (studs).",
+    state.parryClosing,3,25,0,function(v) state.parryClosing=v end)
+registerSlider(Tabs.Survivor,"ParryPanic","Parry Panic","Test near distance (studs).",
+    state.parryPanic,1,12,0,function(v) state.parryPanic=v end)
+registerSlider(Tabs.Survivor,"ParryDebounce","Parry Debounce","Minimum delay between QA events (seconds).",
+    state.parryDebounce,.1,2,2,function(v) state.parryDebounce=v end)
+local qaStatus=Tabs.Survivor:AddParagraph({
+    Title="ACTION STATUS",Content="OFF"
 })
 registerToggle(Tabs.Survivor,"NextKiller","Next Killer Estimate",
     "Based on AllowKiller and KillerChance","nextKiller")
@@ -1868,11 +2284,11 @@ Tabs.Movement:AddButton({
     end
 })
 registerToggle(Tabs.Movement,
-    "MoonwalkAD","Moonwalk Input Practice",
-    "Shows manual A/D input without changing movement or rotation.",
+    "MoonwalkAD","Moonwalk DBD",
+    "Hold S for reverse movement, A+D for wiggle; developer test only.",
     "moonwalk",setMoonwalk)
 local moonwalkStatusBox=Tabs.Movement:AddParagraph({
-    Title="INPUT STATUS",Content="Practice OFF"
+    Title="MOONWALK STATUS",Content="OFF | native rotation"
 })
 
 
@@ -1890,17 +2306,17 @@ Tabs.Visual:AddParagraph({
     Content="70-degree reference lens. Optional angular smoothing and conservative zoom recovery; native collision remains the limit."
 })
 registerToggle(Tabs.Visual,"CustomFov","Custom FOV",
-    "Optional local lens override; OFF restores native FOV.",
+    "0.5x wide lens with smooth turn boost; OFF restores native FOV.",
     "customFov",cameraController.setEnabled)
 local cameraStatusBox=Tabs.Visual:AddParagraph({Title="Camera status",Content="Waiting for camera..."})
 local fovSlider=registerSlider(Tabs.Visual,"CameraFov","Field of View",
     "Vertical FOV in degrees (native maximum 120).",
-    state.fov,60,120,0,function(v) state.fov=v end)
+    state.fov,70,118,0,function(v) state.fov=v end)
 local lensPresets={["1.0x"]=1,["0.8x"]=0.8,["0.7x"]=0.7,["0.6x"]=0.6,["0.5x"]=0.5}
 -- Buttons avoid persisting a second, conflicting FOV source in SaveManager.
 for _,preset in ipairs({"1.0x","0.8x","0.7x","0.6x","0.5x"}) do
     local factor=lensPresets[preset]
-    local degrees=math.floor(math.deg(2*math.atan(math.tan(math.rad(35))/factor))+0.5)
+    local degrees=preset=="0.5x" and 114 or math.floor(math.deg(2*math.atan(math.tan(math.rad(35))/factor))+0.5)
     Tabs.Visual:AddButton({
         Title="Lens "..preset.." / "..tostring(degrees).." deg",
         Description="Set target FOV; enable Custom FOV to apply.",
@@ -1910,17 +2326,17 @@ for _,preset in ipairs({"1.0x","0.8x","0.7x","0.6x","0.5x"}) do
         end
     })
 end
-controls.FovMode=Tabs.Visual:AddDropdown("FovMode",{
-    Title="FOV Behavior",
-    Values={"Preserve Dynamic","Fixed"},Default="Preserve Dynamic",
-    Description="Preserve observed native FOV changes or keep a fixed target.",
-    Callback=function(v)
-        if v=="Preserve Dynamic" or v=="Fixed" then state.fovMode=v end
-    end
-})
-registerSlider(Tabs.Visual,"FovSmooth","FOV Smoothing",
-    "Exponential transition time constant in seconds; 0 = instant.",
-    state.fovSmooth,0,0.6,2,function(v) state.fovSmooth=v end)
+registerSlider(Tabs.Visual,"FovSmoothness","FOV Smoothness",
+    "Lower is slower and more cinematic; 10 is the supplied default.",
+    state.fovSmoothness,1,25,0,function(v) state.fovSmoothness=v end)
+registerSlider(Tabs.Visual,"FovTurnBoost","Turn Dynamic Boost",
+    "Extra degrees during rapid camera rotation.",
+    state.fovTurnBoost,0,6,0,function(v) state.fovTurnBoost=v end)
+registerSlider(Tabs.Visual,"FovStep","FOV Key Step",
+    "Degrees per Z / X press.",
+    state.fovStep,1,10,0,function(v) state.fovStep=v end)
+registerToggle(Tabs.Visual,"FovHotkeys","FOV Shortcuts (Z / X / V)",
+    "Optional keys; existing hub bindings take priority","fovHotkeys")
 registerToggle(Tabs.Visual,"SmoothCamera","Smooth Camera Rotation",
     "Optional visual angular smoothing; native camera still handles movement.",
     "smoothCamera",function() cameraController.refreshPose() end)
@@ -1957,7 +2373,7 @@ local glassModeStatus="Native opaque monochrome"
 Tabs.Settings:AddButton({Title="Reset Window Position",Description="Return the draggable interface to the center of the viewport.",ButtonText="RESET",Callback=function() Window:ResetPosition() end})
 Tabs.Settings:AddParagraph({
     Title="XANDME / MONOCHROME",
-    Content="Right Ctrl opens or closes the menu. Features start OFF and can be enabled individually. Click Unbound on a feature row to assign its key."
+    Content="Right Ctrl or − hides the menu without disabling features. Close unloads the entire hub and restores native controls. Features start OFF."
 })
 local manualCursor=false
 local cursorModal=create("TextButton",Window.Root,{
@@ -2088,7 +2504,12 @@ connect(UserInputService.InputBegan,function(input,processed)
     if bindings[safetyActionId]==name and emergencyDisable then emergencyDisable();return end
     if safetyBusy then return end
     for id,key in pairs(bindings) do
-        if key==name and toggles[id] then toggles[id]:SetValue(not toggles[id].Value);break end
+        if key==name and toggles[id] then toggles[id]:SetValue(not toggles[id].Value);return end
+    end
+    if state.fovHotkeys then
+        if name=="X" or name=="Z" then
+            fovSlider:SetValue(math.clamp(state.fov+(name=="X" and state.fovStep or -state.fovStep),70,118))
+        elseif name=="V" then toggles.CustomFov:SetValue(not toggles.CustomFov.Value) end
     end
 end)
 connect(Window.Root:GetPropertyChangedSignal("Visible"),function()
@@ -2157,6 +2578,10 @@ emergencyDisable=function()
         if toggleStateKeys[id] then state[toggleStateKeys[id]]=false end
     end
     state.roleTracking=false
+    state.objectiveESP=false
+    state.objectLabels=false
+    state.objectHighlight=false
+    state.generatorProgressESP=false
     state.sceneBlur=false
     for _,id in ipairs(toggleOrder) do
         attempt(id,function() toggles[id]:SetValue(false) end)
@@ -2170,6 +2595,7 @@ emergencyDisable=function()
     end)
     alert.Visible=false
     state.inputStatus="Disabled manually"
+    userActions.stop()
     attempt("lighting",updateLighting)
     for _,err in ipairs(restoreNativeControls(true)) do failures[#failures+1]=err end
     local message=#failures==0 and "Feature reset requested; native controls restored where supported." or ("Recovery errors: "..table.concat(failures," | "))
@@ -2258,7 +2684,7 @@ local function playIntro()
         if not state.alive or not intro.Parent then return end
         local fade=TweenService:Create(intro,TweenInfo.new(.48,Enum.EasingStyle.Quad),{GroupTransparency=1})
         fade:Play()
-        fade.Completed:Connect(function()
+        connect(fade.Completed,function()
             if intro.Parent then intro:Destroy() end
         end)
     end)
@@ -2268,10 +2694,7 @@ syncCursor()
 Tabs.Settings:AddButton({
     Title="Unload Velion Hub",
     Description="Disconnect features and close the native window",
-    Callback=function()
-        local f=environment.VelionVDCleanup
-        if type(f)=="function" then f() end
-    end
+    Callback=function() Window:Close() end
 })
 -- Native preferences: persist only non-toggle values. Features always start OFF.
 do
@@ -2408,6 +2831,22 @@ connect(RunService.Heartbeat,function()
             end
         end
     end
+    do
+        local seen={}
+        state.npcFound=0
+        state.npcVisible=0
+        if state.npcESP then
+            for model in pairs(npcDebug.collect(now)) do
+                seen[model]=true
+                state.npcFound+=1
+                ensurePlayerVisual(model)
+                if playerVisuals[model] then state.npcVisible+=1 end
+            end
+        end
+        for subject in pairs(playerVisuals) do
+            if subject:IsA("Model") and not seen[subject] then removePlayerVisual(subject) end
+        end
+    end
     state.trackedPlayers=#list-1
     state.unknownRoles=math.max(0,state.trackedPlayers-knownRoles)
     refreshObjectiveVisibility()
@@ -2460,11 +2899,8 @@ connect(RunService.Heartbeat,function()
         state.visibleHighlights,state.maxWorldHighlights,state.fps))
     skillStatus:SetDesc(skill)
     inputStatus:SetDesc(state.inputStatus)
-    if state.moonwalk then
-        local left=UserInputService:IsKeyDown(Enum.KeyCode.A)
-        local right=UserInputService:IsKeyDown(Enum.KeyCode.D)
-        state.moonwalkStatus="Manual input monitor only (no animation) | A: "..(left and "DOWN" or "up").." | D: "..(right and "DOWN" or "up")
-    end
+    qaStatus:SetDesc("Generator: "..state.skillQAStatus.."\nParry: "..state.parryQAStatus)
+    npcStatus:SetDesc(state.npcESP and string.format("%s | detected: %d | marked: %d",RunService:IsStudio() and "Studio rig discovery" or "Tagged NPCs",state.npcFound,state.npcVisible) or "OFF")
     moonwalkStatusBox:SetDesc(state.moonwalkStatus)
     local hum=char and char:FindFirstChildOfClass("Humanoid")
     local velocity=root and root:IsA("BasePart") and root.AssemblyLinearVelocity or Vector3.zero
@@ -2475,7 +2911,7 @@ connect(RunService.Heartbeat,function()
     movementDiagnostics:SetDesc(string.format("FPS: %d | Network: %s\nNative WalkSpeed: %.1f | Horizontal velocity: %.1f studs/s\nNo movement override is applied by NoClip or Speed Assist.",state.fps,pingText,hum and hum.WalkSpeed or 0,horizontal))
 end)
 
--- No automated gameplay input in this version.
+-- Existing session event cleanup.
 connect(Players.PlayerRemoving,function(leaving)
     removePlayerVisual(leaving)
     roleCache[leaving]=nil
@@ -2483,13 +2919,17 @@ connect(Players.PlayerRemoving,function(leaving)
 end)
 connect(Lighting.ChildAdded,function()
     if state.alive and (state.fullbright or state.noFog) then
-        task.defer(updateLighting)
+        task.defer(function()
+            if state.alive and (state.fullbright or state.noFog) then updateLighting() end
+        end)
     end
 end)
 
 local function cleanup()
     if not state.alive then return end
     state.alive=false
+    local restoreLighting=state.fullbright or state.noFog
+    for _,key in pairs(toggleStateKeys) do state[key]=false end
     local function attempt(name,fn)
         local ok,err=pcall(fn)
         if not ok then
@@ -2498,6 +2938,9 @@ local function cleanup()
         end
     end
     attempt("moonwalk",function() setMoonwalk(false) end)
+    attempt("user actions",userActions.stop)
+    npcDebug.reset()
+    state.objectiveESP=false
     scanGeneration+=1
     attempt("source watchers",stopSourceWatchers)
     for _,conn in ipairs(connections) do
@@ -2515,8 +2958,8 @@ local function cleanup()
     attempt("collision",function() setNoClip(false) end)
     state.fullbright=false
     state.noFog=false
-    attempt("lighting",updateLighting)
-    if state.speed then attempt("speed",function() setSpeed(false) end) end
+    if restoreLighting then attempt("lighting",updateLighting) end
+    attempt("speed",function() setSpeed(false) end)
     attempt("camera",cameraController.shutdown)
     attempt("cursor",stopCursor)
     attempt("overlay",function() gui:Destroy() end)
@@ -2527,4 +2970,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V5.3] Read-only camera diagnostics; Roblox runtime not tested.")
+print("[XandMe V5.3.7] Original user controllers integrated; Roblox runtime not tested.")
