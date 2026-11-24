@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V4.4 - CAMERA UPDATE
+    VELION DISTRICT HUB V4.5 - CAMERA COMFORT
     For Roblox Violence District - client-side utility module.
     Game UI uses upstream Fluent; the World ESP engine is local code.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -34,6 +34,8 @@ local state = {
     fullbright=false, noFog=false, noClip=false,
     speed=false, speedValue=24, fov=70,
     customFov=false, fovMode="Preserve Dynamic", fovSmooth=0.18,
+    smoothCamera=false, cameraTurnTime=0.08,
+    smoothZoom=false, cameraZoomTime=0.18,
     moonwalk=false, moonwalkSteer=.28,
     moonwalkStatus="OFF (enable in Movement or press M)",
     killerAlert=true, offscreenESP=true, hidden=false, scanProgress="Starting",
@@ -196,7 +198,7 @@ local uiHeight=math.min(490,math.max(320,cameraSize.Y-80))
 local createdWindow,Window=pcall(function()
     return Fluent:CreateWindow({
         Title="VELION | VIOLENCE DISTRICT",
-        SubTitle="V4.4 / Camera Update",
+        SubTitle="V4.5 / Camera Comfort",
         TabWidth=cameraSize.X<500 and 116 or 150,
         Size=UDim2.fromOffset(uiWidth,uiHeight),
         Acrylic=true,Theme="Dark",
@@ -1013,69 +1015,169 @@ local function updateSpeed()
         end
     end
 end
--- Optional local lens controller. Keep native camera position, collision and input.
--- Preserve Dynamic estimates the native FOV offset; actual sprint behavior is not verified.
+-- Camera comfort: native camera remains responsible for position, input and occlusion.
+-- Only angular presentation and inward-clamped zoom recovery are filtered.
 local cameraController=(function()
-    local binding="VelionCameraLens_"..tostring(player.UserId)
-    local tracked: Camera?=nil
+    local suffix=tostring(player.UserId)
+    local lensBinding="VelionCameraLens_"..suffix
+    local beforeBinding="VelionCameraBefore_"..suffix
+    local afterBinding="VelionCameraComfort_"..suffix
+    local lensCamera: Camera?=nil
     local reference=70
     local native=70
     local applied: number?=nil
     local filtered=70
-    local bound=false
-    local function restore()
-        if tracked and applied~=nil and math.abs(tracked.FieldOfView-applied)<0.02 then
-            tracked.FieldOfView=native
+    local lensBound=false
+    local poseBound=false
+    local poseCamera: Camera?=nil
+    local rawPose: CFrame?=nil
+    local shownPose: CFrame?=nil
+    local smoothedRotation: CFrame?=nil
+    local smoothedDistance: number?=nil
+    local lastFocus: Vector3?=nil
+    local function alpha(dt,seconds)
+        return seconds<=0 and 1 or 1-math.exp(-math.clamp(dt,0,0.25)/seconds)
+    end
+    local function eligible(cam)
+        if not cam or cam.CameraType~=Enum.CameraType.Custom then return false end
+        local character=player.Character
+        local subject=cam.CameraSubject
+        if not character or not subject or not subject:IsDescendantOf(character) then return false end
+        local hum=character:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health<=0 then return false end
+        if game:GetService("VRService").VREnabled then return false end
+        return true
+    end
+    local function restoreLens()
+        if lensCamera and applied~=nil and math.abs(lensCamera.FieldOfView-applied)<0.02 then
+            lensCamera.FieldOfView=native
         end
-        tracked=nil
+        lensCamera=nil
         applied=nil
     end
-    local function step(dt: number)
+    local function lensStep(dt)
         if not state.alive or not state.customFov then return end
         local cam=Workspace.CurrentCamera
-        if tracked~=cam then
-            restore()
-            if not cam then return end
-            tracked=cam
+        if not eligible(cam) then restoreLens(); return end
+        if lensCamera~=cam then
+            restoreLens()
+            lensCamera=cam
             reference=cam.FieldOfView
             native=reference
             filtered=reference
         end
-        if not cam then return end
-        -- Respect scripted cinematics; resume from a new native baseline afterwards.
-        if cam.CameraType==Enum.CameraType.Scriptable then
-            restore()
-            return
-        end
         local observed=cam.FieldOfView
-        if applied==nil or math.abs(observed-applied)>0.02 then
-            native=observed
-        end
+        if applied==nil or math.abs(observed-applied)>0.02 then native=observed end
         local offset=state.fovMode=="Preserve Dynamic" and (native-reference) or 0
         local target=math.clamp(state.fov+offset,1,120)
-        local alpha=state.fovSmooth<=0 and 1 or
-            (1-math.exp(-math.clamp(dt,0,0.25)/state.fovSmooth))
-        filtered=math.clamp(filtered+(target-filtered)*alpha,1,120)
+        filtered=math.clamp(filtered+(target-filtered)*alpha(dt,state.fovSmooth),1,120)
         if math.abs(target-filtered)<0.02 then filtered=target end
-        if math.abs(observed-filtered)>0.02 then
-            cam.FieldOfView=filtered
-            applied=cam.FieldOfView
+        if math.abs(observed-filtered)>0.02 then cam.FieldOfView=filtered end
+        applied=cam.FieldOfView
+    end
+    local function restorePose()
+        if poseCamera and rawPose and shownPose and poseCamera.CFrame==shownPose then
+            poseCamera.CFrame=rawPose
         end
+        rawPose=nil
+        shownPose=nil
+    end
+    local function clearPose()
+        restorePose()
+        poseCamera=nil
+        smoothedRotation=nil
+        smoothedDistance=nil
+        lastFocus=nil
+    end
+    local function beforePose()
+        -- Do not feed our visual pose back into the native camera controller.
+        restorePose()
+    end
+    local function afterPose(dt)
+        local cam=Workspace.CurrentCamera
+        if not state.alive or not eligible(cam) then clearPose(); return end
+        if poseCamera~=cam then clearPose(); poseCamera=cam end
+        local raw=cam.CFrame
+        local focus=cam.Focus.Position
+        local offset=raw.Position-focus
+        local distance=offset.Magnitude
+        local rawRotation=raw.Rotation
+        if distance<2.5 or (lastFocus and (focus-lastFocus).Magnitude>12) then
+            smoothedRotation=rawRotation
+            smoothedDistance=distance
+            lastFocus=focus
+            return
+        end
+        lastFocus=focus
+        local previousRotation=smoothedRotation or rawRotation
+        local previousDistance=smoothedDistance or distance
+        local rotation=rawRotation
+        if state.smoothCamera then
+            rotation=previousRotation:Lerp(rawRotation,alpha(dt,state.cameraTurnTime))
+            local _,lag=(rotation:ToObjectSpace(rawRotation)):ToAxisAngle()
+            -- Limit visual lag; rapid direction changes remain responsive.
+            if math.abs(lag)>math.rad(12) then
+                rotation=rawRotation:Lerp(rotation,math.rad(12)/math.abs(lag))
+            end
+        end
+        local newDistance=distance
+        if state.smoothZoom and distance>previousDistance then
+            newDistance=math.min(distance,previousDistance+(distance-previousDistance)*alpha(dt,state.cameraZoomTime))
+        end
+        -- Occlusion or deliberate zoom-in always wins immediately.
+        newDistance=math.clamp(newDistance,0,distance)
+        smoothedRotation=rotation
+        smoothedDistance=newDistance
+        local position=focus+offset.Unit*newDistance
+        rawPose=raw
+        cam.CFrame=CFrame.new(position)*rotation
+        shownPose=cam.CFrame
     end
     local function setEnabled(enabled: boolean)
         state.customFov=enabled
-        if enabled and not bound then
-            RunService:BindToRenderStep(binding,Enum.RenderPriority.Last.Value+1,step)
-            bound=true
+        if enabled and not lensBound then
+            RunService:BindToRenderStep(lensBinding,Enum.RenderPriority.Last.Value+1,lensStep)
+            lensBound=true
         elseif not enabled then
-            if bound then
-                RunService:UnbindFromRenderStep(binding)
-                bound=false
-            end
-            restore()
+            if lensBound then RunService:UnbindFromRenderStep(lensBinding); lensBound=false end
+            restoreLens()
         end
     end
-    return {setEnabled=setEnabled}
+    local function refreshPose()
+        local enabled=state.smoothCamera or state.smoothZoom
+        if enabled and not poseBound then
+            RunService:BindToRenderStep(beforeBinding,Enum.RenderPriority.Camera.Value-1,beforePose)
+            RunService:BindToRenderStep(afterBinding,Enum.RenderPriority.Camera.Value+1,afterPose)
+            poseBound=true
+        elseif not enabled then
+            if poseBound then
+                RunService:UnbindFromRenderStep(beforeBinding)
+                RunService:UnbindFromRenderStep(afterBinding)
+                poseBound=false
+            end
+            clearPose()
+        end
+    end
+    local function nativeFreeLookInfo()
+        local ok,mode=pcall(function() return UserSettings().GameSettings.ComputerCameraMovementMode end)
+        if not ok then return "Read unavailable; use Roblox Settings > Camera Mode." end
+        if player.DevComputerCameraMode~=Enum.DevComputerCameraMovementMode.UserChoice
+            and player.DevComputerCameraMode~=Enum.DevComputerCameraMovementMode.CameraToggle then
+            return "Camera mode is controlled by this experience. No override applied."
+        end
+        if mode==Enum.ComputerCameraMovementMode.CameraToggle
+            or player.DevComputerCameraMode==Enum.DevComputerCameraMovementMode.CameraToggle then
+            return "CameraToggle selected. Click RMB once to enter or exit free-look."
+        end
+        return "Open Roblox Settings > Camera Mode > CameraToggle if available; click RMB once. Current: "..tostring(mode.Name)
+    end
+    local function shutdown()
+        state.smoothCamera=false
+        state.smoothZoom=false
+        refreshPose()
+        setEnabled(false)
+    end
+    return {setEnabled=setEnabled,refreshPose=refreshPose,shutdown=shutdown,nativeFreeLookInfo=nativeFreeLookInfo}
 end)()
 local function setSpeed(value)
     state.speed=value
@@ -1427,7 +1529,7 @@ registerToggle(Tabs.Visual,"NoFog","Remove Fog",
     function() updateLighting() end)
 Tabs.Visual:AddParagraph({
     Title="CAMERA / LENS",
-    Content="Wide lens presets use 70-degree vertical FOV as the 1x reference. Native camera movement and wall collision stay unchanged."
+    Content="70-degree reference lens. Optional angular smoothing and conservative zoom recovery; native collision remains the limit."
 })
 registerToggle(Tabs.Visual,"CustomFov","Custom FOV",
     "Optional local lens override; OFF restores native FOV.",
@@ -1460,12 +1562,34 @@ controls.FovMode=Tabs.Visual:AddDropdown("FovMode",{
 registerSlider(Tabs.Visual,"FovSmooth","FOV Smoothing",
     "Exponential transition time constant in seconds; 0 = instant.",
     state.fovSmooth,0,0.6,2,function(v) state.fovSmooth=v end)
+registerToggle(Tabs.Visual,"SmoothCamera","Smooth Camera Rotation",
+    "Optional visual angular smoothing; native camera still handles movement.",
+    "smoothCamera",function() cameraController.refreshPose() end)
+registerSlider(Tabs.Visual,"CameraTurnTime","Rotation Smoothing",
+    "Transition time in seconds; 0 = native response.",
+    state.cameraTurnTime,0,0.3,2,function(v) state.cameraTurnTime=v end)
+registerToggle(Tabs.Visual,"SmoothZoom","Smooth Zoom Recovery",
+    "Smooth zoom-out only; zoom-in remains immediate for native occlusion.",
+    "smoothZoom",function() cameraController.refreshPose() end)
+registerSlider(Tabs.Visual,"CameraZoomTime","Zoom Recovery Time",
+    "Transition time in seconds; 0 = instant.",
+    state.cameraZoomTime,0,0.6,2,function(v) state.cameraZoomTime=v end)
+Tabs.Visual:AddButton({
+    Title="Native Free-Look Setup",
+    Description="Check whether Roblox CameraToggle is available. No forced camera mode.",
+    Callback=function()
+        Fluent:Notify({Title="Native Free-Look",Content=cameraController.nativeFreeLookInfo(),Duration=8})
+    end
+})
 Tabs.Visual:AddButton({
     Title="Reset Camera Lens",
-    Description="Restore 70-degree target and disable custom lens.",
+    Description="Disable all camera comfort overrides and restore the native camera.",
     Callback=function()
         fovSlider:SetValue(70)
+        toggles.SmoothCamera:SetValue(false)
+        toggles.SmoothZoom:SetValue(false)
         toggles.CustomFov:SetValue(false)
+        cameraController.shutdown()
     end
 })
 
@@ -1601,7 +1725,7 @@ uiStatus:SetDesc(runUISelfCheck())
 pcall(function() Window:SelectTab(1) end)
 pcall(function()
     Fluent:Notify({
-        Title="Velion District V4.4",
+        Title="Velion District V4.5",
         Content="Fluent UI loaded. See Settings for diagnostic status.",
         Duration=5
     })
@@ -1826,7 +1950,7 @@ local function cleanup()
     state.noFog=false
     updateLighting()
     if state.speed then setSpeed(false) end
-    cameraController.setEnabled(false)
+    cameraController.shutdown()
     gui:Destroy()
     pcall(function() Fluent:Destroy() end)
     if environment.VelionVDCleanup==cleanup then
@@ -1835,4 +1959,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 startObjectiveScan()
-print("[Velion District V4.4] Optional camera lens presets and smoothing; Roblox runtime not tested.")
+print("[Velion District V4.5] Camera comfort controls; Roblox runtime not tested.")
