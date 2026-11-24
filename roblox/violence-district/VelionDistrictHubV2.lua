@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V5.3 - CAMERA STATUS DIAGNOSTICS
+    VELION DISTRICT HUB V5.3.1 - ESP LIFECYCLE FIX
     For Roblox Violence District - client-side utility module.
     Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -30,7 +30,7 @@ for _,name in ipairs({"VelionDistrictHub","VelionDistrictHubV2"}) do
 end
 
 local state = {
-    alive=true, playerESP=false, objectiveESP=false,
+    alive=true, playerESP=false, objectiveESP=false, npcESP=false,
     fullbright=false, lightIntensity=100, noFog=false, noClip=false,
     speed=false, speedValue=24, fov=70,
     customFov=false, fovMode="Preserve Dynamic", fovSmooth=0.18,
@@ -60,7 +60,7 @@ local state = {
     maxWorldLabels=22, maxWorldHighlights=20, objectLabels=false,
     scanCandidates=0, scanScanned=0, scanDurationMs=0,
     visibleLabels=0, visibleHighlights=0, fps=60,
-    highlightBudgetAvailable=20,
+    highlightBudgetAvailable=20, objectiveOrder=0,
 }
 local palette = {
     bg=Color3.fromRGB(26,28,27),
@@ -866,12 +866,18 @@ local function ensurePlayerVisual(other)
     if other==player or not state.playerESP then
         removePlayerVisual(other);return
     end
-    local character=other.Character
-    local head=character and character:FindFirstChild("Head")
-    if not head then
+    local isNPC=other:IsA("Model")
+    if isNPC and (not state.npcESP or not other:IsDescendantOf(Workspace)
+        or Players:GetPlayerFromCharacter(other) or not other:FindFirstChildOfClass("Humanoid")) then
         removePlayerVisual(other);return
     end
-    local role,color=roleOf(other)
+    local character=isNPC and other or other.Character
+    local head=character and (character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart"))
+    if not head or not head:IsA("BasePart") then
+        removePlayerVisual(other);return
+    end
+    local role,color="NPC",espColors.Unknown
+    if not isNPC then role,color=roleOf(other) end
     if (role=="Killer" and not state.killerESP) or
         (role=="Survivor" and not state.survivorESP) or
         (role=="Unknown" and not state.unknownESP) then
@@ -892,14 +898,9 @@ local function ensurePlayerVisual(other)
         existing=nil
     end
     if not existing then
-        local highlight=create("Highlight",Workspace,{
-            Name="VelionVDPlayerOutline",Adornee=character,
-            DepthMode=Enum.HighlightDepthMode.AlwaysOnTop,
-            FillTransparency=.82,OutlineTransparency=0
-        })
         local billboard=create("BillboardGui",playerGui,{
             Name="VelionVDPlayerTag",Adornee=head,
-            AlwaysOnTop=true,Size=UDim2.fromOffset(205,62),
+            AlwaysOnTop=not isNPC,Size=UDim2.fromOffset(205,62),
             StudsOffsetWorldSpace=Vector3.new(0,2.5,0),
             MaxDistance=650
         })
@@ -910,7 +911,7 @@ local function ensurePlayerVisual(other)
         pointer.TextXAlignment=Enum.TextXAlignment.Center
         pointer.TextStrokeTransparency=.2
         pointer.Visible=false
-        existing={character=character,highlight=highlight,
+        existing={character=character,highlight=nil,
             billboard=billboard,text=textLabel,pointer=pointer}
         playerVisuals[other]=existing
     end
@@ -925,7 +926,7 @@ local function ensurePlayerVisual(other)
     elseif isChased and state.chaseStatus then color=espColors.Chased end
     local selectedKiller=gameValue(other,"SelectedKiller")
     local nick=(role=="Killer" and selectedKiller)
-        and tostring(selectedKiller) or other.DisplayName
+        and tostring(selectedKiller) or (isNPC and other.Name or other.DisplayName)
     local mask=(state.playerMask and role=="Killer") and maskLabel(other) or nil
     local status=(isHooked and state.hookedStatus and "HOOKED")
         or (isKnocked and state.knockedStatus and "KNOCKED")
@@ -935,9 +936,21 @@ local function ensurePlayerVisual(other)
         local item=character:FindFirstChildWhichIsA("Tool")
         if item then heldItem=item.Name end
     end
-    highlightStyle(existing.highlight,color)
-    existing.highlight.Enabled=state.playerHighlight and
-        (not distance or distance<=state.espDistance)
+    if state.playerHighlight then
+        if not existing.highlight then
+            existing.highlight=create("Highlight",Workspace,{
+                Name="VelionVDPlayerOutline",Adornee=character,
+                DepthMode=isNPC and Enum.HighlightDepthMode.Occluded
+                    or Enum.HighlightDepthMode.AlwaysOnTop,
+                FillTransparency=.82,OutlineTransparency=0
+            })
+        end
+        highlightStyle(existing.highlight,color)
+    elseif existing.highlight then
+        existing.highlight:Destroy()
+        existing.highlight=nil
+    end
+    if existing.billboard.Adornee~=head then existing.billboard.Adornee=head end
     existing.billboard.MaxDistance=state.espDistance
     existing.billboard.Enabled=state.playerNames or status~=nil
         or heldItem~=nil or (state.playerMask and mask~=nil)
@@ -1146,16 +1159,17 @@ local function considerObjective(candidate: Instance)
     local obj,part,kind=getObjective(candidate)
     if not obj or not part or not kind then return end
     if objectiveVisuals[obj] then return end
+    state.objectiveOrder+=1
     objectiveVisuals[obj]={
-        obj=obj,part=part,kind=kind,gui=nil,
+        obj=obj,part=part,kind=kind,gui=nil,order=state.objectiveOrder,
         highlight=nil,text=nil,lastVisible=0,
         progressRef=nil,progressMaxRef=nil
     }
     state.identifiedObjectives+=1
     if kind.key=="item" then state.worldItemsFound+=1 end
 end
-local function makeObjectiveNodes(rec)
-    if not rec.gui then
+local function makeObjectiveNodes(rec,showLabel,showOutline)
+    if showLabel and not rec.gui then
         local board=create("BillboardGui",playerGui,{
             Name="VelionVDObjective",Adornee=rec.part,
             Size=UDim2.fromOffset(160,30),AlwaysOnTop=true,
@@ -1169,7 +1183,7 @@ local function makeObjectiveNodes(rec)
         rec.gui=board
         rec.text=tag
     end
-    if state.objectHighlight and not rec.highlight then
+    if showOutline and not rec.highlight then
         rec.highlight=create("Highlight",Workspace,{
             Name="VelionVDObjectiveOutline",Adornee=rec.obj,
             Enabled=false,DepthMode=Enum.HighlightDepthMode.AlwaysOnTop,
@@ -1244,47 +1258,50 @@ end
 
 local function refreshObjectiveVisibility()
     local now=os.clock()
-    if now-lastObjectiveRefresh<.3 then return end
+    if now-lastObjectiveRefresh<.25 then return end
     lastObjectiveRefresh=now
-    local cam=Workspace.CurrentCamera
     local root=player.Character and
         player.Character:FindFirstChild("HumanoidRootPart")
     local candidates={}
     local cacheCount=0
     for obj,rec in pairs(objectiveVisuals) do
-        if not obj.Parent or not rec.part.Parent or not inScope(obj) then
+        if not obj.Parent or not inScope(obj) then
             removeObjectiveRecord(obj)
         else
+            -- Streaming may replace a model's original anchor.
+            if not rec.part.Parent or not rec.part:IsDescendantOf(Workspace) then
+                local _,replacement=getObjective(obj)
+                if replacement then
+                    rec.part=replacement
+                    if rec.gui then rec.gui.Adornee=replacement end
+                else
+                    removeObjectiveRecord(obj)
+                    continue
+                end
+            end
             cacheCount+=1
-            if rec.gui then rec.gui.Enabled=false end
-            if rec.highlight then rec.highlight.Enabled=false end
             if state.objectiveESP and objectiveEnabled(rec.kind.key)
-                and root and cam then
+                and root and root:IsA("BasePart") then
                 local d=(root.Position-rec.part.Position).Magnitude
                 if d<=state.espDistance then
-                    local pos,onScreen=cam:WorldToViewportPoint(
-                        rec.part.Position)
-                    if onScreen and pos.Z>0 then
-                        candidates[#candidates+1]={
-                            rec=rec,dist=d,pos=pos,
-                            priority=d-rec.kind.priority
-                        }
-                    end
+                    candidates[#candidates+1]={
+                        rec=rec,priority=d-rec.kind.priority
+                    }
                 end
             end
         end
     end
+    -- Camera rotation does not change which records occupy the budget.
+    -- Native BillboardGui and Highlight rendering handles the camera frustum.
     table.sort(candidates,function(a,b)
+        if a.priority==b.priority then return a.rec.order<b.rec.order end
         return a.priority<b.priority
     end)
-    local occupied={}
+    local selectedLabels,selectedHighlights={},{}
     local labels,highlights=0,0
-    -- Share a conservative Highlight limit with active Player ESP.
     local playerHighlights=0
     for _,data in pairs(playerVisuals) do
-        if data.highlight and data.highlight.Enabled then
-            playerHighlights+=1
-        end
+        if data.highlight then playerHighlights+=1 end
     end
     local safeHighlightLimit=math.min(state.maxWorldHighlights,
         math.max(0,28-playerHighlights))
@@ -1292,16 +1309,34 @@ local function refreshObjectiveVisibility()
     state.progressUnknown=0
     for _,entry in ipairs(candidates) do
         local rec=entry.rec
-        local cell=math.floor(entry.pos.X/125)..":"..
-            math.floor(entry.pos.Y/64)
-        local showLabel=state.objectLabels
-            and labels<state.maxWorldLabels and not occupied[cell]
-        local showOutline=state.objectHighlight
-            and highlights<safeHighlightLimit
+        if state.objectLabels and labels<state.maxWorldLabels then
+            selectedLabels[rec]=true
+            labels+=1
+        end
+        if state.objectHighlight and highlights<safeHighlightLimit then
+            selectedHighlights[rec]=true
+            highlights+=1
+        end
+    end
+    -- Release unselected slots before creating replacements.
+    -- Disabled Highlight instances still reserve engine slots.
+    for _,rec in pairs(objectiveVisuals) do
+        if rec.highlight and not selectedHighlights[rec] then
+            rec.highlight:Destroy()
+            rec.highlight=nil
+        end
+        if rec.gui and not selectedLabels[rec] and rec.gui.Enabled then
+            rec.gui.Enabled=false
+        end
+    end
+    for _,entry in ipairs(candidates) do
+        local rec=entry.rec
+        local showLabel=selectedLabels[rec]==true
+        local showOutline=selectedHighlights[rec]==true
         if showLabel or showOutline then
-            makeObjectiveNodes(rec)
+            makeObjectiveNodes(rec,showLabel,showOutline)
             local color=categoryColor(rec.kind.key)
-            if rec.text then
+            if showLabel and rec.text then
                 rec.text.TextColor3=color
                 if rec.kind.key=="generator" and state.generatorProgressESP then
                     rec.text.Text=generatorProgress(rec)
@@ -1313,24 +1348,20 @@ local function refreshObjectiveVisibility()
             end
             if rec.gui then
                 rec.gui.MaxDistance=state.espDistance
-                rec.gui.Enabled=showLabel
+                if rec.gui.Enabled~=showLabel then rec.gui.Enabled=showLabel end
             end
             if rec.highlight then
                 highlightStyle(rec.highlight,color)
-                rec.highlight.Enabled=showOutline
+                if not rec.highlight.Enabled then rec.highlight.Enabled=true end
             end
-            if showLabel then
-                occupied[cell]=true;labels+=1
-            end
-            if showOutline then highlights+=1 end
             rec.lastVisible=now
         end
     end
-    -- Prune only inactive visuals; retain metadata so spawning hundreds of
-    -- objects won't spawn hundreds of GUI instances.
     for _,rec in pairs(objectiveVisuals) do
-        if rec.gui and now-rec.lastVisible>5 then
-            destroyObjectiveNodes(rec)
+        if rec.gui and not selectedLabels[rec] and now-rec.lastVisible>5 then
+            rec.gui:Destroy()
+            rec.gui=nil
+            rec.text=nil
         end
     end
     state.scanCandidates=cacheCount
@@ -1697,6 +1728,15 @@ registerToggle(Tabs.Players,"SurvivorESP","Survivor ESP",
 registerColor(Tabs.Players,"SurvivorColor","Survivor Color","Survivor")
 registerToggle(Tabs.Players,"UnknownESP","Unknown Role Markers",
     "Disabled by default; prevents lobby role false positives","unknownESP")
+registerToggle(Tabs.Players,"NPCESP","Debug NPC / Dummy",
+    "Developer-tagged VelionDebugNPC models; requires names or body highlight","npcESP",
+    function(value)
+        if not value then
+            for subject in pairs(playerVisuals) do
+                if subject:IsA("Model") then removePlayerVisual(subject) end
+            end
+        end
+    end)
 registerToggle(Tabs.Players,"SurvivorItems","Survivor Equipped Items",
     "Show Tool names equipped by visible Survivor characters",
     "survivorItemsESP")
@@ -1787,7 +1827,7 @@ local progressDropdown=Tabs.Objects:AddDropdown("GeneratorProgressScale",{
 })
 controls.GeneratorProgressScale=progressDropdown
 registerToggle(Tabs.Objects,"ObjectLabels","Object Labels",
-    "Display labels without crowding the screen","objectLabels",
+    "Display distance-prioritized labels with a fixed budget","objectLabels",
     function() lastObjectiveRefresh=0;refreshObjectiveVisibility() end)
 registerSlider(Tabs.Objects,"MaxLabels","Maximum Object Labels",
     "Render nearest prioritized labels; 0 hides labels",
@@ -2408,6 +2448,21 @@ connect(RunService.Heartbeat,function()
             end
         end
     end
+    -- Only explicitly developer-tagged NPCs, not arbitrary lobby/preview rigs.
+    do
+        local seen={}
+        if state.playerESP and state.npcESP then
+            for _,model in ipairs(game:GetService("CollectionService"):GetTagged("VelionDebugNPC")) do
+                if model:IsA("Model") and model:IsDescendantOf(Workspace) then
+                    seen[model]=true
+                    ensurePlayerVisual(model)
+                end
+            end
+        end
+        for subject in pairs(playerVisuals) do
+            if subject:IsA("Model") and not seen[subject] then removePlayerVisual(subject) end
+        end
+    end
     state.trackedPlayers=#list-1
     state.unknownRoles=math.max(0,state.trackedPlayers-knownRoles)
     refreshObjectiveVisibility()
@@ -2527,4 +2582,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V5.3] Read-only camera diagnostics; Roblox runtime not tested.")
+print("[XandMe V5.3.1] ESP lifecycle revision; Roblox runtime not tested.")
