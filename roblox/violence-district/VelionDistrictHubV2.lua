@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V5.3.1 - ESP LIFECYCLE FIX
+    VELION DISTRICT HUB V5.3.2 - CLOSE AND MOONWALK
     For Roblox Violence District - client-side utility module.
     Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -289,11 +289,15 @@ local Native,Window=(function()
     create("UISizeConstraint",root,{MaxSize=Vector2.new(810,570)})
     local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0,Active=true})
     local brand=text(header,"XandMe.",26,true)
-    brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-120,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
-    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3",10,false,C.muted)
-    subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-120,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
-    local close=btn(header,"−",34,30)
+    brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-144,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
+    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3.2",10,false,C.muted)
+    subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-144,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
+    local minimize=btn(header,"−",34,30)
+    minimize.AnchorPoint=Vector2.new(1,.5);minimize.Position=UDim2.new(1,-78,.5,0)
+    local close=btn(header,"Close",60,30)
     close.AnchorPoint=Vector2.new(1,.5);close.Position=UDim2.new(1,-12,.5,0)
+    close.BackgroundColor3=Color3.fromRGB(82,31,36)
+    close.TextColor3=Color3.fromRGB(255,230,230)
     create("Frame",root,{Position=UDim2.fromOffset(0,62),Size=UDim2.new(1,0,0,1),BackgroundColor3=C.border,BorderSizePixel=0})
     local sidebar=create("ScrollingFrame",root,{
         Name="Navigation",Position=UDim2.fromOffset(0,63),Size=UDim2.new(.24,0,1,-63),
@@ -312,7 +316,12 @@ local Native,Window=(function()
         self.Minimized=not self.Minimized
         root.Visible=not self.Minimized
     end
-    bindClick(close,"close",function() window:Minimize() end)
+    function window:Close()
+        local cleanup=environment.VelionVDCleanup
+        if type(cleanup)=="function" then cleanup() end
+    end
+    bindClick(minimize,"minimize",function() window:Minimize() end)
+    bindClick(close,"unload",function() window:Close() end)
     connect(UserInputService.InputBegan,function(input)
         if state.alive and input.KeyCode==Enum.KeyCode.RightControl and not UserInputService:GetFocusedTextBox() then
             window:Minimize()
@@ -339,8 +348,11 @@ local Native,Window=(function()
     connect(header.InputBegan,function(input)
         if not state.alive or not root.Visible or windowDrag then return end
         if input.UserInputType~=Enum.UserInputType.MouseButton1 and input.UserInputType~=Enum.UserInputType.Touch then return end
-        local closePos,closeSize=close.AbsolutePosition,close.AbsoluteSize
-        if input.Position.X>=closePos.X and input.Position.X<=closePos.X+closeSize.X and input.Position.Y>=closePos.Y and input.Position.Y<=closePos.Y+closeSize.Y then return end
+        for _,control in ipairs({minimize,close}) do
+            local pos,size=control.AbsolutePosition,control.AbsoluteSize
+            if input.Position.X>=pos.X and input.Position.X<=pos.X+size.X
+                and input.Position.Y>=pos.Y and input.Position.Y<=pos.Y+size.Y then return end
+        end
         windowDrag={input=input,start=Vector2.new(input.Position.X,input.Position.Y),center=root.AbsolutePosition-screen.AbsolutePosition+root.AbsoluteSize/2}
     end)
     connect(UserInputService.InputChanged,function(input)
@@ -1675,11 +1687,105 @@ end
 
 
 
--- Manual input practice: never writes Humanoid.Move, AutoRotate, or root CFrame.
-local function setMoonwalk(enabled: boolean)
-    state.moonwalk=enabled
-    state.moonwalkStatus=enabled and "Manual input monitor only; does not animate the character." or "Practice OFF"
-end
+-- Cosmetic moonwalk: reverse compatible native locomotion tracks while A/D
+-- is held. Never changes movement input, speed, collision or root orientation.
+local setMoonwalk=(function()
+    local frameConnection: RBXScriptConnection?=nil
+    local activeTracks: {[AnimationTrack]: {native: number, applied: number}}={}
+    local function restoreTrack(track: AnimationTrack)
+        local record=activeTracks[track]
+        if not record then return end
+        activeTracks[track]=nil
+        local ok,err=pcall(function()
+            -- Don't overwrite a newer speed chosen by the experience.
+            if math.abs(track.Speed-record.applied)<.001 then
+                track:AdjustSpeed(record.native)
+            end
+        end)
+        if not ok then runtimeLog.record("moonwalk restore",err) end
+    end
+    local function restoreAll()
+        for track in pairs(activeTracks) do restoreTrack(track) end
+    end
+    local function locomotion(track: AnimationTrack): boolean
+        if not track.IsPlaying or not track.Looped or track.Length<=0 then return false end
+        if track.Priority~=Enum.AnimationPriority.Movement and track.Priority~=Enum.AnimationPriority.Core then return false end
+        local anim=track.Animation
+        local name=(track.Name.." "..(anim and anim.Name or "")):lower()
+        if name:find("walk",1,true) or name:find("run",1,true) then return true end
+        local char=player.Character
+        local animate=char and char:FindFirstChild("Animate")
+        if not animate or not anim then return false end
+        for _,kind in ipairs({"walk","run"}) do
+            local group=animate:FindFirstChild(kind)
+            local nativeAnimation=group and (group:IsA("Animation") and group or group:FindFirstChildWhichIsA("Animation",true))
+            if nativeAnimation and nativeAnimation:IsA("Animation") and nativeAnimation.AnimationId==anim.AnimationId then return true end
+        end
+        return false
+    end
+    local function update()
+        if not state.alive or not state.moonwalk then restoreAll();return end
+        if UserInputService:GetFocusedTextBox() then
+            restoreAll();state.moonwalkStatus="READY | text input focused";return
+        end
+        local left=UserInputService:IsKeyDown(Enum.KeyCode.A)
+        local right=UserInputService:IsKeyDown(Enum.KeyCode.D)
+        local char=player.Character
+        local hum=char and char:FindFirstChildOfClass("Humanoid")
+        local animator=hum and hum:FindFirstChildOfClass("Animator")
+        if left==right or not hum or hum.Health<=0 or not animator or hum.Sit
+            or hum.FloorMaterial==Enum.Material.Air or hum.MoveDirection.Magnitude<.05 then
+            restoreAll()
+            state.moonwalkStatus="READY | hold A or D while walking on the ground"
+            return
+        end
+        local seen: {[AnimationTrack]: boolean}={}
+        local count=0
+        for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
+            if locomotion(track) then
+                local record=activeTracks[track]
+                local observed=track.Speed
+                -- Reuse the latest native forward playback rate, never reverse
+                -- a paused or already reversed track owned by another system.
+                local native=record and record.native or observed
+                if record and math.abs(observed-record.applied)>.001 then native=observed end
+                if native>0 then
+                    local target=-math.abs(native)
+                    if math.abs(observed-target)>.001 then track:AdjustSpeed(target) end
+                    activeTracks[track]={native=native,applied=target}
+                    seen[track]=true
+                    count+=1
+                end
+            end
+        end
+        for track in pairs(activeTracks) do
+            if not seen[track] then restoreTrack(track) end
+        end
+        state.moonwalkStatus=count>0
+            and ("ACTIVE | "..(left and "A" or "D").." | reversed tracks: "..count)
+            or "WAITING | no compatible looping walk/run animation"
+    end
+    return function(enabled: boolean)
+        state.moonwalk=enabled and state.alive
+        if state.moonwalk then
+            state.moonwalkStatus="READY | hold A or D while walking"
+            if not frameConnection then
+                frameConnection=RunService.PreAnimation:Connect(function()
+                    local ok,err=pcall(update)
+                    if not ok then
+                        restoreAll()
+                        state.moonwalkStatus="Animation unavailable | see runtime diagnostics"
+                        runtimeLog.record("moonwalk",err)
+                    end
+                end)
+            end
+        else
+            if frameConnection then frameConnection:Disconnect();frameConnection=nil end
+            restoreAll()
+            state.moonwalkStatus="OFF | native animation restored"
+        end
+    end
+end)()
 
 -- =========================================
 -- Native controls.
@@ -1908,11 +2014,11 @@ Tabs.Movement:AddButton({
     end
 })
 registerToggle(Tabs.Movement,
-    "MoonwalkAD","Moonwalk Input Practice",
-    "Shows manual A/D input without changing movement or rotation.",
+    "MoonwalkAD","Moonwalk A/D",
+    "Reverse compatible walk/run playback while holding A or D; cosmetic only.",
     "moonwalk",setMoonwalk)
 local moonwalkStatusBox=Tabs.Movement:AddParagraph({
-    Title="INPUT STATUS",Content="Practice OFF"
+    Title="MOONWALK STATUS",Content="OFF | native animation"
 })
 
 
@@ -1997,7 +2103,7 @@ local glassModeStatus="Native opaque monochrome"
 Tabs.Settings:AddButton({Title="Reset Window Position",Description="Return the draggable interface to the center of the viewport.",ButtonText="RESET",Callback=function() Window:ResetPosition() end})
 Tabs.Settings:AddParagraph({
     Title="XANDME / MONOCHROME",
-    Content="Right Ctrl opens or closes the menu. Features start OFF and can be enabled individually. Click Unbound on a feature row to assign its key."
+    Content="Right Ctrl or − hides the menu without disabling features. Close unloads the entire hub and restores native controls. Features start OFF."
 })
 local manualCursor=false
 local cursorModal=create("TextButton",Window.Root,{
@@ -2298,7 +2404,7 @@ local function playIntro()
         if not state.alive or not intro.Parent then return end
         local fade=TweenService:Create(intro,TweenInfo.new(.48,Enum.EasingStyle.Quad),{GroupTransparency=1})
         fade:Play()
-        fade.Completed:Connect(function()
+        connect(fade.Completed,function()
             if intro.Parent then intro:Destroy() end
         end)
     end)
@@ -2308,10 +2414,7 @@ syncCursor()
 Tabs.Settings:AddButton({
     Title="Unload Velion Hub",
     Description="Disconnect features and close the native window",
-    Callback=function()
-        local f=environment.VelionVDCleanup
-        if type(f)=="function" then f() end
-    end
+    Callback=function() Window:Close() end
 })
 -- Native preferences: persist only non-toggle values. Features always start OFF.
 do
@@ -2515,11 +2618,6 @@ connect(RunService.Heartbeat,function()
         state.visibleHighlights,state.maxWorldHighlights,state.fps))
     skillStatus:SetDesc(skill)
     inputStatus:SetDesc(state.inputStatus)
-    if state.moonwalk then
-        local left=UserInputService:IsKeyDown(Enum.KeyCode.A)
-        local right=UserInputService:IsKeyDown(Enum.KeyCode.D)
-        state.moonwalkStatus="Manual input monitor only (no animation) | A: "..(left and "DOWN" or "up").." | D: "..(right and "DOWN" or "up")
-    end
     moonwalkStatusBox:SetDesc(state.moonwalkStatus)
     local hum=char and char:FindFirstChildOfClass("Humanoid")
     local velocity=root and root:IsA("BasePart") and root.AssemblyLinearVelocity or Vector3.zero
@@ -2538,13 +2636,17 @@ connect(Players.PlayerRemoving,function(leaving)
 end)
 connect(Lighting.ChildAdded,function()
     if state.alive and (state.fullbright or state.noFog) then
-        task.defer(updateLighting)
+        task.defer(function()
+            if state.alive and (state.fullbright or state.noFog) then updateLighting() end
+        end)
     end
 end)
 
 local function cleanup()
     if not state.alive then return end
     state.alive=false
+    local restoreLighting=state.fullbright or state.noFog
+    for _,key in pairs(toggleStateKeys) do state[key]=false end
     local function attempt(name,fn)
         local ok,err=pcall(fn)
         if not ok then
@@ -2570,8 +2672,8 @@ local function cleanup()
     attempt("collision",function() setNoClip(false) end)
     state.fullbright=false
     state.noFog=false
-    attempt("lighting",updateLighting)
-    if state.speed then attempt("speed",function() setSpeed(false) end) end
+    if restoreLighting then attempt("lighting",updateLighting) end
+    attempt("speed",function() setSpeed(false) end)
     attempt("camera",cameraController.shutdown)
     attempt("cursor",stopCursor)
     attempt("overlay",function() gui:Destroy() end)
@@ -2582,4 +2684,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V5.3.1] ESP lifecycle revision; Roblox runtime not tested.")
+print("[XandMe V5.3.2] Close and cosmetic Moonwalk revision; Roblox runtime not tested.")
