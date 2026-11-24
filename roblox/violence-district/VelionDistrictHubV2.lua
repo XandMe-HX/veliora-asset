@@ -1,11 +1,11 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V5.3.6 - OBJECT LABELS, DYNAMIC FOV AND QA
+    VELION DISTRICT HUB V5.3.7 - ORIGINAL USER CONTROLLERS
     For Roblox Violence District - client-side utility module.
     Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
     Existing observational features remain unverified; no game security bypass.
-    Automated actions are restricted to explicitly enabled Studio QA adapters.
+    User-supplied controllers; runtime compatibility is unverified.
 ]]
 
 local Players = game:GetService("Players")
@@ -33,7 +33,7 @@ local state = {
     alive=true, playerESP=false, objectiveESP=false, npcESP=false,
     fullbright=false, lightIntensity=100, noFog=false, noClip=false,
     speed=false, speedValue=24, fov=114,
-    customFov=false, fovMode="Turn Dynamic", fovSmoothness=10,fovTurnBoost=5,fovStep=3,fovHotkeys=false,
+    customFov=false, fovSmoothness=10,fovTurnBoost=5,fovStep=3,fovHotkeys=false,
     smoothCamera=false, cameraTurnTime=0.08,
     smoothZoom=false, cameraZoomTime=0.18,
     moonwalk=false, moonwalkSteer=.28,
@@ -48,7 +48,7 @@ local state = {
     playerHighlight=false, objectHighlight=false, highlightMode="Outline", nextKiller=false, skillMonitor=false,
     autoSkillCheck=false, whiteZoneOffset=109, skillQAStatus="OFF",
     autoParry=false, parryRange=14,parryClosing=12,parryPanic=6,parryDebounce=.4,parryQAStatus="OFF",
-    inputStatus="Manual input / Studio QA adapter only",
+    inputStatus="User-supplied input controller",
     generatorESP=false, palletESP=false, windowESP=false, hookESP=false,
     gateESP=false, generatorProgressESP=false, espDistance=650,
     identifiedObjectives=0, unknownRoles=0,
@@ -292,7 +292,7 @@ local Native,Window=(function()
     local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0,Active=true})
     local brand=text(header,"XandMe.",26,true)
     brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-144,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
-    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3.6",10,false,C.muted)
+    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3.7",10,false,C.muted)
     subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-144,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
     local minimize=btn(header,"−",34,30)
     minimize.AnchorPoint=Vector2.new(1,.5);minimize.Position=UDim2.new(1,-78,.5,0)
@@ -1535,10 +1535,7 @@ local cameraController=(function()
     local beforeBinding="VelionCameraBefore_"..suffix
     local afterBinding="VelionCameraComfort_"..suffix
     local lensCamera: Camera?=nil
-    local reference=70
-    local native=70
-    local applied: number?=nil
-    local filtered=70
+    local filtered=state.fov
     local lastCamLook: Vector3?=nil
     local lensBound=false
     local poseBound=false
@@ -1562,39 +1559,43 @@ local cameraController=(function()
         return true
     end
     local function restoreLens()
-        if lensCamera and applied~=nil and math.abs(lensCamera.FieldOfView-applied)<0.02 then
-            lensCamera.FieldOfView=native
-        end
+        if lensCamera then lensCamera.FieldOfView=70 end
         lensCamera=nil
-        applied=nil
         lastCamLook=nil
     end
     local function lensStep(dt)
-        if not state.alive or not state.customFov then return end
+        if not state.alive or game.GameId~=6739698191 then return end
         local cam=Workspace.CurrentCamera
-        if not eligible(cam) then restoreLens(); return end
+        if not cam then return end
         if lensCamera~=cam then
             restoreLens()
             lensCamera=cam
-            reference=cam.FieldOfView
-            native=reference
-            filtered=reference
         end
-        local observed=cam.FieldOfView
-        if applied==nil or math.abs(observed-applied)>0.02 then native=observed end
-        local offset=state.fovMode=="Preserve Dynamic" and (native-reference) or 0
+        if not state.customFov then
+            filtered=filtered+(70-filtered)*math.clamp(dt*state.fovSmoothness,0,1)
+            cam.FieldOfView=filtered
+            lastCamLook=cam.CFrame.LookVector
+            if math.abs(filtered-70)<.01 then
+                cam.FieldOfView=70
+                RunService:UnbindFromRenderStep(lensBinding)
+                lensBound=false
+                lensCamera=nil
+                lastCamLook=nil
+            end
+            return
+        end
         local look=cam.CFrame.LookVector
         local turnBonus=0
-        if lastCamLook and state.fovMode=="Turn Dynamic" then
-            local angle=math.acos(math.clamp(lastCamLook:Dot(look),-1,1))
-            turnBonus=math.clamp(angle/math.max(dt,.001)*.8,0,state.fovTurnBoost)
+        if lastCamLook then
+            local dot=math.clamp(lastCamLook:Dot(look),-1,1)
+            local angleDelta=math.acos(dot)
+            local turnSpeed=angleDelta/math.max(dt,.001)
+            turnBonus=math.clamp(turnSpeed*.8,0,state.fovTurnBoost)
         end
         lastCamLook=look
-        local target=math.clamp(state.fov+offset+turnBonus,1,120)
-        filtered=math.clamp(filtered+(target-filtered)*math.clamp(dt*state.fovSmoothness,0,1),1,120)
-        if math.abs(target-filtered)<0.02 then filtered=target end
-        if math.abs(observed-filtered)>0.02 then cam.FieldOfView=filtered end
-        applied=cam.FieldOfView
+        local targetFov=math.clamp(state.fov+turnBonus,70,120)
+        filtered=filtered+(targetFov-filtered)*math.clamp(dt*state.fovSmoothness,0,1)
+        cam.FieldOfView=filtered
     end
     local function restorePose()
         if poseCamera and rawPose and shownPose and poseCamera.CFrame==shownPose then
@@ -1656,12 +1657,11 @@ local cameraController=(function()
     end
     local function setEnabled(enabled: boolean)
         state.customFov=enabled
-        if enabled and not lensBound then
+        if enabled and not lensBound and game.GameId==6739698191 then
+            filtered=state.fov
+            lastCamLook=nil
             RunService:BindToRenderStep(lensBinding,Enum.RenderPriority.Camera.Value+10,lensStep)
             lensBound=true
-        elseif not enabled then
-            if lensBound then RunService:UnbindFromRenderStep(lensBinding); lensBound=false end
-            restoreLens()
         end
     end
     local function refreshPose()
@@ -1696,7 +1696,9 @@ local cameraController=(function()
         state.smoothCamera=false
         state.smoothZoom=false
         refreshPose()
-        setEnabled(false)
+        state.customFov=false
+        if lensBound then RunService:UnbindFromRenderStep(lensBinding);lensBound=false end
+        restoreLens()
     end
     local function status()
         -- Read-only diagnostics. Do not change camera ownership or eligibility.
@@ -1708,8 +1710,9 @@ local cameraController=(function()
         if not state.customFov and not state.smoothCamera and not state.smoothZoom then
             return info.."\nAll camera options OFF. Native camera is unchanged."
         end
-        if not eligible(cam) then
-            return info.."\nNative camera unavailable for these options. Experience camera is respected."
+        if state.customFov and game.GameId~=6739698191 then return info.."\nFOV: unsupported GameId" end
+        if (state.smoothCamera or state.smoothZoom) and not eligible(cam) then
+            return info.."\nRotation/zoom smoothing unavailable for this camera type."
         end
         return info.."\nOptions requested. Runtime behavior has not been verified."
     end
@@ -2030,111 +2033,182 @@ Tabs.Killer:AddParagraph({
     Content="No server ability packets are captured. Unknown states produce no speculative alerts."
 })
 
--- Explicit Studio-only QA integration. The experience's local test harness
--- owns the action callbacks. Never simulate executor input or fire live UI signals.
-local qaActions=(function()
+-- User's Auto Generator and Auto Parry algorithms. Hub adapters only expose
+-- original settings and manage enable/disable, connections and cleanup.
+local userActions=(function()
+    local Teams=game:GetService("Teams")
+    local LocalPlayer=player
+    local PlayerGui=playerGui
     local generatorConn: RBXScriptConnection?=nil
     local parryConn: RBXScriptConnection?=nil
     local alreadyHit=false
-    local previousCheck: Instance?=nil
-    local previousGoal: Instance?=nil
-    local previousGoalRotation: number?=nil
-    local lastPress=-math.huge
-    local lastScan=-math.huge
-    local function authorized(): boolean
-        return RunService:IsStudio() and Workspace:GetAttribute("VelionEnableQAActions")==true
-    end
-    local function action(name: string): BindableEvent?
-        local folder=playerGui:FindFirstChild("VelionTestActions")
-        local event=folder and folder:FindFirstChild(name)
-        if event and event:IsA("BindableEvent") then return event end
-        return nil
-    end
-    local function resetGenerator()
-        alreadyHit=false
-        previousCheck=nil
-        previousGoal=nil
-        previousGoalRotation=nil
+    local lastPressTime=0
+    local cachedParryButton=nil
+    local lastScan=0
+    local function pressSkillCheck()
+        local ok,err=pcall(function()
+            local VirtualInputManager=game:GetService("VirtualInputManager")
+            if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
+                local cam=Workspace.CurrentCamera
+                local x=cam and (cam.ViewportSize.X / 2) or 500
+                local y=cam and (cam.ViewportSize.Y / 2) or 300
+                VirtualInputManager:SendTouchEvent(1, 0, x, y)
+                task.wait(0.02)
+                VirtualInputManager:SendTouchEvent(1, 2, x, y)
+            else
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+                task.wait(0.02)
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+            end
+        end)
+        if not ok then runtimeLog.record("Auto Generator",err);state.skillQAStatus="ERROR | input unavailable"
+        else state.skillQAStatus="INPUT SENT" end
     end
     local function generatorStep()
         if not state.alive or not state.autoSkillCheck then return end
-        if not authorized() then resetGenerator();state.skillQAStatus="LOCKED | Studio QA only";return end
-        local event=action("GeneratorCheck")
-        if not event then resetGenerator();state.skillQAStatus="WAITING | GeneratorCheck test adapter";return end
-        local prompt=playerGui:FindFirstChild("SkillCheckPromptGui")
-        local check=prompt and prompt:FindFirstChild("Check")
-        if not prompt or not prompt:IsA("ScreenGui") or not prompt.Enabled
-            or not check or not check:IsA("GuiObject") or not check.Visible then
-            resetGenerator();state.skillQAStatus="READY | waiting for test prompt";return
-        end
-        local line=check:FindFirstChild("Line")
-        local goal=check:FindFirstChild("Goal")
-        if not line or not line:IsA("GuiObject") or not goal or not goal:IsA("GuiObject") then
-            resetGenerator();state.skillQAStatus="WAITING | Line / Goal";return
-        end
-        if check~=previousCheck or goal~=previousGoal or goal.Rotation~=previousGoalRotation then
+        if game.GameId~=6739698191 then state.skillQAStatus="Unsupported GameId";return end
+        local promptGui=PlayerGui:FindFirstChild("SkillCheckPromptGui")
+        if not promptGui or not promptGui.Enabled then
             alreadyHit=false
-            previousCheck=check
-            previousGoal=goal
-            previousGoalRotation=goal.Rotation
-        end
-        if alreadyHit then return end
-        local center=(goal.Rotation+state.whiteZoneOffset)%360
-        local diff=(line.Rotation-center)%360
-        state.skillQAStatus=string.format("READY | offset %d | delta %.1f",state.whiteZoneOffset,diff)
-        if diff<=8 then
-            alreadyHit=true
-            event:Fire()
-            state.skillQAStatus="TEST EVENT SENT | awaiting next prompt"
-        end
-    end
-    local function parryStep()
-        if not state.alive or not state.autoParry then return end
-        if not authorized() then state.parryQAStatus="LOCKED | Studio QA only";return end
-        local now=os.clock()
-        if now-lastScan<.03 then return end
-        lastScan=now
-        local event=action("Parry")
-        if not event then state.parryQAStatus="WAITING | Parry test adapter";return end
-        local char=player.Character
-        local root=char and char:FindFirstChild("HumanoidRootPart")
-        local item=char and char:FindFirstChildWhichIsA("Tool")
-        if not root or not root:IsA("BasePart") or not item then state.parryQAStatus="WAITING | test item";return end
-        -- The test harness exposes an authoritative ready boolean on the item.
-        -- Unknown cooldown state is not interpreted as ready.
-        local ready=item:GetAttribute("ParryReady")
-        local cooldown=item:GetAttribute("ParryCooldown")
-        if ready~=true or cooldown==true or (type(cooldown)=="number" and cooldown>0)
-            or now-lastPress<state.parryDebounce then
-            state.parryQAStatus="WAITING | item readiness / cooldown"
+            state.skillQAStatus="READY | waiting for prompt"
             return
         end
-        -- Only explicit developer-tagged test actors participate.
-        local nearest: BasePart?=nil
-        local actor: Model?=nil
-        local distance=math.huge
-        for _,model in ipairs(game:GetService("CollectionService"):GetTagged("VelionQAOpponent")) do
-            if model:IsA("Model") and model~=char and model:IsDescendantOf(Workspace) then
-                local part=model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
-                if part and part:IsA("BasePart") then
-                    local d=(root.Position-part.Position).Magnitude
-                    if d<distance then nearest=part;actor=model;distance=d end
+        local check=promptGui:FindFirstChild("Check")
+        if not check or not check.Visible then
+            alreadyHit=false
+            state.skillQAStatus="READY | waiting for check"
+            return
+        end
+        if alreadyHit then return end
+        local line=check:FindFirstChild("Line")
+        local goal=check:FindFirstChild("Goal")
+        if line and goal then
+            local lineRot=line.Rotation % 360
+            local goalRot=goal.Rotation % 360
+            local whiteZoneCenter=(goalRot + state.whiteZoneOffset) % 360
+            local diff=(lineRot - whiteZoneCenter) % 360
+            if diff >= 0 and diff <= 8 then
+                alreadyHit=true
+                pressSkillCheck()
+            end
+        end
+    end
+    local function findParryButton()
+        if os.clock() - lastScan < 3 and cachedParryButton and cachedParryButton.Parent then
+            return cachedParryButton
+        end
+        lastScan=os.clock()
+        for _,desc in ipairs(PlayerGui:GetDescendants()) do
+            if desc:IsA("GuiButton") and desc.Visible then
+                local lowerName=desc.Name:lower()
+                if lowerName:find("parry") or lowerName:find("block") or lowerName:find("dagger") or lowerName:find("counter") then
+                    cachedParryButton=desc
+                    return desc
                 end
             end
         end
-        if not nearest or not actor or distance>state.parryRange then
-            state.parryQAStatus="READY | waiting for tagged test actor";return
+        return nil
+    end
+    local function isItemOnCooldown()
+        if os.clock() - lastPressTime < state.parryDebounce then return true end
+        local char=LocalPlayer.Character
+        local tool=char and char:FindFirstChildWhichIsA("Tool")
+        for _,target in ipairs({LocalPlayer,char,tool}) do
+            if target then
+                if target:GetAttribute("ParryCooldown") == true
+                    or target:GetAttribute("OnCooldown") == true
+                    or target:GetAttribute("Cooldown") == true
+                    or (tonumber(target:GetAttribute("Cooldown")) or 0) > 0
+                    or (tonumber(target:GetAttribute("ParryCooldown")) or 0) > 0 then
+                    return true
+                end
+            end
         end
-        local toMe=root.Position-nearest.Position
-        local closing=toMe.Magnitude>.001 and nearest.AssemblyLinearVelocity:Dot(toMe.Unit) or 0
-        local attacking=actor:GetAttribute("Attacking")==true or actor:GetAttribute("Lunging")==true
-        if distance<=state.parryPanic or attacking
-            or (distance<=state.parryClosing and closing>18) then
-            lastPress=now
-            event:Fire()
-            state.parryQAStatus="TEST EVENT SENT | waiting for cooldown"
-        else
-            state.parryQAStatus="READY | test actor in range"
+        local btn=findParryButton()
+        if btn then
+            if btn.BackgroundTransparency > 0.6 or not btn.Active then return true end
+            for _,child in ipairs(btn:GetDescendants()) do
+                if child:IsA("Frame") and child.Visible then
+                    local cName=child.Name:lower()
+                    if cName:find("cool") or cName:find("cd") or cName:find("overlay") or cName:find("fill") then
+                        if child.Size.Y.Scale > 0.02 or child.Size.X.Scale > 0.02 then return true end
+                    end
+                end
+                if child:IsA("TextLabel") and child.Visible and child.Text ~= "" then
+                    local num=tonumber(child.Text:match("(%d+%.?%d*)"))
+                    if num and num > 0 then return true end
+                end
+            end
+        end
+        return false
+    end
+    local function getKillerCharacter()
+        local killerTeam=Teams:FindFirstChild("Killer")
+        if not killerTeam then return nil end
+        -- API correction only: Team:GetPlayers returns an array, not a Player.
+        local killerPlayer=killerTeam:GetPlayers()[1]
+        return killerPlayer and killerPlayer.Character
+    end
+    local function executeParry()
+        if isItemOnCooldown() then return end
+        lastPressTime=os.clock()
+        local ok,err=pcall(function()
+            local char=LocalPlayer.Character
+            local tool=char and char:FindFirstChildWhichIsA("Tool")
+            if tool then tool:Activate() end
+            local btn=findParryButton()
+            if btn then
+                if type(firesignal) == "function" then
+                    firesignal(btn.MouseButton1Click)
+                    firesignal(btn.Activated)
+                else
+                    local VirtualInputManager=game:GetService("VirtualInputManager")
+                    local pos=btn.AbsolutePosition + (btn.AbsoluteSize / 2)
+                    VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 1)
+                    task.wait(0.02)
+                    VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 1)
+                end
+            else
+                local VirtualInputManager=game:GetService("VirtualInputManager")
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
+                task.wait(0.02)
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
+            end
+        end)
+        if not ok then runtimeLog.record("Auto Parry",err);state.parryQAStatus="ERROR | input unavailable"
+        else state.parryQAStatus="INPUT SENT" end
+    end
+    local function isKillerAttacking(killerChar)
+        local hum=killerChar:FindFirstChildOfClass("Humanoid")
+        local animator=hum and hum:FindFirstChildOfClass("Animator")
+        if animator then
+            for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
+                local animName=(track.Name .. (track.Animation and track.Animation.Name or "")):lower()
+                if animName:find("attack") or animName:find("swing") or animName:find("slash") or animName:find("lunge") or animName:find("hit") then
+                    return true
+                end
+            end
+        end
+        return killerChar:GetAttribute("Attacking") == true or killerChar:GetAttribute("Lunging") == true
+    end
+    local function parryStep()
+        if not state.alive or not state.autoParry then return end
+        if game.GameId~=6739698191 then state.parryQAStatus="Unsupported GameId";return end
+        if isItemOnCooldown() then state.parryQAStatus="COOLDOWN";return end
+        local myChar=LocalPlayer.Character
+        local myRoot=myChar and myChar:FindFirstChild("HumanoidRootPart")
+        if not myRoot then return end
+        local killerChar=getKillerCharacter()
+        local killerRoot=killerChar and killerChar:FindFirstChild("HumanoidRootPart")
+        if not killerRoot then state.parryQAStatus="READY | waiting for Killer";return end
+        local dist=(killerRoot.Position-myRoot.Position).Magnitude
+        if dist > state.parryRange then return end
+        local toMe=(myRoot.Position-killerRoot.Position).Unit
+        local closingSpeed=killerRoot.AssemblyLinearVelocity:Dot(toMe)
+        if dist <= state.parryPanic
+            or (dist <= state.parryRange and isKillerAttacking(killerChar))
+            or (dist <= state.parryClosing and closingSpeed > 18) then
+            executeParry()
         end
     end
     local function guarded(name,fn)
@@ -2143,10 +2217,10 @@ local qaActions=(function()
     end
     local function setGenerator(value: boolean)
         state.autoSkillCheck=value and state.alive
-        resetGenerator()
+        alreadyHit=false
         if state.autoSkillCheck then
-            state.skillQAStatus=authorized() and "READY" or "LOCKED | Studio QA only"
-            if not generatorConn then generatorConn=RunService.RenderStepped:Connect(function() guarded("generator QA",generatorStep) end) end
+            state.skillQAStatus="READY"
+            if not generatorConn then generatorConn=RunService.RenderStepped:Connect(function() guarded("Auto Generator",generatorStep) end) end
         else
             if generatorConn then generatorConn:Disconnect();generatorConn=nil end
             state.skillQAStatus="OFF"
@@ -2155,10 +2229,11 @@ local qaActions=(function()
     local function setParry(value: boolean)
         state.autoParry=value and state.alive
         if state.autoParry then
-            state.parryQAStatus=authorized() and "READY" or "LOCKED | Studio QA only"
-            if not parryConn then parryConn=RunService.Heartbeat:Connect(function() guarded("parry QA",parryStep) end) end
+            state.parryQAStatus="READY"
+            if not parryConn then parryConn=RunService.Heartbeat:Connect(function() guarded("Auto Parry",parryStep) end) end
         else
             if parryConn then parryConn:Disconnect();parryConn=nil end
+            cachedParryButton=nil
             state.parryQAStatus="OFF"
         end
     end
@@ -2168,13 +2243,13 @@ end)()
 -- Survivor mechanics only where source references are available.
 registerToggle(Tabs.Survivor,"MonitorSkill","Skill Check Monitor",
     "Read Line / Goal rotation from the game UI","skillMonitor")
-registerToggle(Tabs.Survivor,"AutoGenerator","Auto Generator (QA)",
-    "Studio test callback when the skill-check target window is reached","autoSkillCheck",qaActions.setGenerator)
+registerToggle(Tabs.Survivor,"AutoGenerator","Auto Generator",
+    "Original white-zone timing controller","autoSkillCheck",userActions.setGenerator)
 registerSlider(Tabs.Survivor,"WhiteZoneOffset","White Zone Offset",
     "Calibration in degrees; supplied default 109.",
     state.whiteZoneOffset,90,130,0,function(v) state.whiteZoneOffset=v end)
-registerToggle(Tabs.Survivor,"AutoParry","Auto Parry (QA)",
-    "Studio test callback with item readiness and tagged test actors","autoParry",qaActions.setParry)
+registerToggle(Tabs.Survivor,"AutoParry","Auto Parry",
+    "Original attack detection and item cooldown checks","autoParry",userActions.setParry)
 registerSlider(Tabs.Survivor,"ParryRange","Parry Range","Test detection distance (studs).",
     state.parryRange,6,25,0,function(v) state.parryRange=v end)
 registerSlider(Tabs.Survivor,"ParryClosing","Parry Closing","Test closing distance (studs).",
@@ -2184,7 +2259,7 @@ registerSlider(Tabs.Survivor,"ParryPanic","Parry Panic","Test near distance (stu
 registerSlider(Tabs.Survivor,"ParryDebounce","Parry Debounce","Minimum delay between QA events (seconds).",
     state.parryDebounce,.1,2,2,function(v) state.parryDebounce=v end)
 local qaStatus=Tabs.Survivor:AddParagraph({
-    Title="QA ACTION STATUS",Content="OFF | Studio test adapters only"
+    Title="ACTION STATUS",Content="OFF"
 })
 registerToggle(Tabs.Survivor,"NextKiller","Next Killer Estimate",
     "Based on AllowKiller and KillerChance","nextKiller")
@@ -2236,7 +2311,7 @@ registerToggle(Tabs.Visual,"CustomFov","Custom FOV",
 local cameraStatusBox=Tabs.Visual:AddParagraph({Title="Camera status",Content="Waiting for camera..."})
 local fovSlider=registerSlider(Tabs.Visual,"CameraFov","Field of View",
     "Vertical FOV in degrees (native maximum 120).",
-    state.fov,60,120,0,function(v) state.fov=v end)
+    state.fov,70,118,0,function(v) state.fov=v end)
 local lensPresets={["1.0x"]=1,["0.8x"]=0.8,["0.7x"]=0.7,["0.6x"]=0.6,["0.5x"]=0.5}
 -- Buttons avoid persisting a second, conflicting FOV source in SaveManager.
 for _,preset in ipairs({"1.0x","0.8x","0.7x","0.6x","0.5x"}) do
@@ -2251,19 +2326,11 @@ for _,preset in ipairs({"1.0x","0.8x","0.7x","0.6x","0.5x"}) do
         end
     })
 end
-controls.FovMode=Tabs.Visual:AddDropdown("FovMode",{
-    Title="FOV Behavior",
-    Values={"Turn Dynamic","Preserve Dynamic","Fixed"},Default="Turn Dynamic",
-    Description="Turn-based widening, native FOV offset, or fixed target.",
-    Callback=function(v)
-        if v=="Turn Dynamic" or v=="Preserve Dynamic" or v=="Fixed" then state.fovMode=v end
-    end
-})
 registerSlider(Tabs.Visual,"FovSmoothness","FOV Smoothness",
     "Lower is slower and more cinematic; 10 is the supplied default.",
     state.fovSmoothness,1,25,0,function(v) state.fovSmoothness=v end)
 registerSlider(Tabs.Visual,"FovTurnBoost","Turn Dynamic Boost",
-    "Extra degrees during rapid camera rotation in Turn Dynamic mode.",
+    "Extra degrees during rapid camera rotation.",
     state.fovTurnBoost,0,6,0,function(v) state.fovTurnBoost=v end)
 registerSlider(Tabs.Visual,"FovStep","FOV Key Step",
     "Degrees per Z / X press.",
@@ -2441,7 +2508,7 @@ connect(UserInputService.InputBegan,function(input,processed)
     end
     if state.fovHotkeys then
         if name=="X" or name=="Z" then
-            fovSlider:SetValue(math.clamp(state.fov+(name=="X" and state.fovStep or -state.fovStep),60,120))
+            fovSlider:SetValue(math.clamp(state.fov+(name=="X" and state.fovStep or -state.fovStep),70,118))
         elseif name=="V" then toggles.CustomFov:SetValue(not toggles.CustomFov.Value) end
     end
 end)
@@ -2528,7 +2595,7 @@ emergencyDisable=function()
     end)
     alert.Visible=false
     state.inputStatus="Disabled manually"
-    qaActions.stop()
+    userActions.stop()
     attempt("lighting",updateLighting)
     for _,err in ipairs(restoreNativeControls(true)) do failures[#failures+1]=err end
     local message=#failures==0 and "Feature reset requested; native controls restored where supported." or ("Recovery errors: "..table.concat(failures," | "))
@@ -2844,7 +2911,7 @@ connect(RunService.Heartbeat,function()
     movementDiagnostics:SetDesc(string.format("FPS: %d | Network: %s\nNative WalkSpeed: %.1f | Horizontal velocity: %.1f studs/s\nNo movement override is applied by NoClip or Speed Assist.",state.fps,pingText,hum and hum.WalkSpeed or 0,horizontal))
 end)
 
--- No automated gameplay input in this version.
+-- Existing session event cleanup.
 connect(Players.PlayerRemoving,function(leaving)
     removePlayerVisual(leaving)
     roleCache[leaving]=nil
@@ -2871,7 +2938,7 @@ local function cleanup()
         end
     end
     attempt("moonwalk",function() setMoonwalk(false) end)
-    attempt("QA actions",qaActions.stop)
+    attempt("user actions",userActions.stop)
     npcDebug.reset()
     state.objectiveESP=false
     scanGeneration+=1
@@ -2903,4 +2970,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V5.3.6] Object names, dynamic FOV and Studio QA; Roblox runtime not tested.")
+print("[XandMe V5.3.7] Original user controllers integrated; Roblox runtime not tested.")
