@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V5.3.8 - ORIGINAL MOONWALK
+    VELION DISTRICT HUB V5.3.9 - FAIL-SAFE AUTO PARRY
     For Roblox Violence District - client-side utility module.
     Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -47,7 +47,7 @@ local state = {
     playerMask=false, chaseStatus=false, knockedStatus=false, hookedStatus=false,
     playerHighlight=false, objectHighlight=false, highlightMode="Outline", nextKiller=false, skillMonitor=false,
     autoSkillCheck=false, whiteZoneOffset=109, skillQAStatus="OFF",
-    autoParry=false, parryRange=14,parryClosing=12,parryPanic=6,parryDebounce=.4,parryQAStatus="OFF",
+    autoParry=false, parryRange=14,parryPanic=6.2,parryDebounce=1.0,parryQAStatus="OFF",
     inputStatus="User-supplied input controller",
     generatorESP=false, palletESP=false, windowESP=false, hookESP=false,
     gateESP=false, generatorProgressESP=false, espDistance=650,
@@ -292,7 +292,7 @@ local Native,Window=(function()
     local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0,Active=true})
     local brand=text(header,"XandMe.",26,true)
     brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-144,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
-    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3.8",10,false,C.muted)
+    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3.9",10,false,C.muted)
     subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-144,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
     local minimize=btn(header,"−",34,30)
     minimize.AnchorPoint=Vector2.new(1,.5);minimize.Position=UDim2.new(1,-78,.5,0)
@@ -2035,11 +2035,11 @@ local userActions=(function()
     local LocalPlayer=player
     local PlayerGui=playerGui
     local generatorConn: RBXScriptConnection?=nil
-    local parryConn: RBXScriptConnection?=nil
     local alreadyHit=false
-    local lastPressTime=0
-    local cachedParryButton=nil
-    local lastScan=0
+    local parryConnections: {RBXScriptConnection}={}
+    local parryGeneration=0
+    local hookedKillers={}
+    local lastParryTick=0
     local function pressSkillCheck()
         local ok,err=pcall(function()
             local VirtualInputManager=game:GetService("VirtualInputManager")
@@ -2088,123 +2088,180 @@ local userActions=(function()
             end
         end
     end
-    local function findParryButton()
-        if os.clock() - lastScan < 3 and cachedParryButton and cachedParryButton.Parent then
-            return cachedParryButton
+    local NON_DAGGER_ITEMS = {
+        "pistol", "revolver", "gun", "flashlight", "senter", "bandage", "medkit",
+        "adrenaline", "candle", "holy", "tracker", "gate", "clone"
+    }
+    local function findParryingDagger()
+        local char = LocalPlayer.Character
+        local backpack = LocalPlayer:FindFirstChild("Backpack")
+        local function isDagger(tool)
+            if not tool:IsA("Tool") then return false end
+            local lower = tool.Name:lower()
+            for _, bad in ipairs(NON_DAGGER_ITEMS) do
+                if lower:find(bad, 1, true) then return false end
+            end
+            return true
         end
-        lastScan=os.clock()
-        for _,desc in ipairs(PlayerGui:GetDescendants()) do
-            if desc:IsA("GuiButton") and desc.Visible then
-                local lowerName=desc.Name:lower()
-                if lowerName:find("parry") or lowerName:find("block") or lowerName:find("dagger") or lowerName:find("counter") then
-                    cachedParryButton=desc
-                    return desc
-                end
+        if char then
+            for _, item in ipairs(char:GetChildren()) do
+                if isDagger(item) then return item, true end
             end
         end
-        return nil
+        if backpack then
+            for _, item in ipairs(backpack:GetChildren()) do
+                if isDagger(item) then return item, false end
+            end
+        end
+        return nil, false
     end
-    local function isItemOnCooldown()
-        if os.clock() - lastPressTime < state.parryDebounce then return true end
-        local char=LocalPlayer.Character
-        local tool=char and char:FindFirstChildWhichIsA("Tool")
-        for _,target in ipairs({LocalPlayer,char,tool}) do
+    local function isDaggerOnCooldown(daggerTool)
+        if os.clock() - lastParryTick < state.parryDebounce then return true end
+        for _, target in ipairs({ daggerTool, LocalPlayer.Character, LocalPlayer }) do
             if target then
-                if target:GetAttribute("ParryCooldown") == true
-                    or target:GetAttribute("OnCooldown") == true
-                    or target:GetAttribute("Cooldown") == true
-                    or (tonumber(target:GetAttribute("Cooldown")) or 0) > 0
-                    or (tonumber(target:GetAttribute("ParryCooldown")) or 0) > 0 then
-                    return true
-                end
-            end
-        end
-        local btn=findParryButton()
-        if btn then
-            if btn.BackgroundTransparency > 0.6 or not btn.Active then return true end
-            for _,child in ipairs(btn:GetDescendants()) do
-                if child:IsA("Frame") and child.Visible then
-                    local cName=child.Name:lower()
-                    if cName:find("cool") or cName:find("cd") or cName:find("overlay") or cName:find("fill") then
-                        if child.Size.Y.Scale > 0.02 or child.Size.X.Scale > 0.02 then return true end
+                for attrName, val in pairs(target:GetAttributes()) do
+                    local lower = attrName:lower()
+                    if lower:find("cool") or lower:find("cd") or lower:find("recharge") then
+                        if val == true or (type(val) == "number" and val > 0) then
+                            return true
+                        end
                     end
-                end
-                if child:IsA("TextLabel") and child.Visible and child.Text ~= "" then
-                    local num=tonumber(child.Text:match("(%d+%.?%d*)"))
-                    if num and num > 0 then return true end
                 end
             end
         end
         return false
     end
     local function getKillerCharacter()
-        local killerTeam=Teams:FindFirstChild("Killer")
+        local killerTeam = Teams:FindFirstChild("Killer")
         if not killerTeam then return nil end
-        -- API correction only: Team:GetPlayers returns an array, not a Player.
-        local killerPlayer=killerTeam:GetPlayers()[1]
+        local list = killerTeam:GetPlayers()
+        -- GetPlayers returns an array.
+        local killerPlayer = list and list[1]
         return killerPlayer and killerPlayer.Character
     end
-    local function executeParry()
-        if isItemOnCooldown() then return end
-        lastPressTime=os.clock()
-        local ok,err=pcall(function()
-            local char=LocalPlayer.Character
-            local tool=char and char:FindFirstChildWhichIsA("Tool")
-            if tool then tool:Activate() end
-            local btn=findParryButton()
-            if btn then
-                if type(firesignal) == "function" then
-                    firesignal(btn.MouseButton1Click)
-                    firesignal(btn.Activated)
-                else
-                    local VirtualInputManager=game:GetService("VirtualInputManager")
-                    local pos=btn.AbsolutePosition + (btn.AbsoluteSize / 2)
-                    VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 1)
-                    task.wait(0.02)
-                    VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 1)
-                end
-            else
-                local VirtualInputManager=game:GetService("VirtualInputManager")
-                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
-                task.wait(0.02)
-                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
-            end
-        end)
-        if not ok then runtimeLog.record("Auto Parry",err);state.parryQAStatus="ERROR | input unavailable"
-        else state.parryQAStatus="INPUT SENT" end
-    end
-    local function isKillerAttacking(killerChar)
-        local hum=killerChar:FindFirstChildOfClass("Humanoid")
-        local animator=hum and hum:FindFirstChildOfClass("Animator")
-        if animator then
-            for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
-                local animName=(track.Name .. (track.Animation and track.Animation.Name or "")):lower()
-                if animName:find("attack") or animName:find("swing") or animName:find("slash") or animName:find("lunge") or animName:find("hit") then
-                    return true
+    local function didParryActivate(daggerTool)
+        local char = LocalPlayer.Character
+        if not char then return false end
+        for _, target in ipairs({ char, daggerTool }) do
+            if target then
+                for attrName, val in pairs(target:GetAttributes()) do
+                    local lower = attrName:lower()
+                    if (lower:find("parry") or lower:find("guard") or lower:find("block") or lower:find("active")) and val == true then
+                        return true
+                    end
                 end
             end
         end
-        return killerChar:GetAttribute("Attacking") == true or killerChar:GetAttribute("Lunging") == true
+        return false
+    end
+    local function executeWithFallback(sourceName)
+        if not state.alive or not state.autoParry then return end
+        local daggerTool, isEquipped = findParryingDagger()
+        if not daggerTool or isDaggerOnCooldown(daggerTool) then return end
+        local myChar = LocalPlayer.Character
+        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        local killerChar = getKillerCharacter()
+        local killerRoot = killerChar and killerChar:FindFirstChild("HumanoidRootPart")
+        if not myRoot or not killerRoot then return end
+        local dist = (killerRoot.Position - myRoot.Position).Magnitude
+        if dist > state.parryRange then return end
+        lastParryTick = os.clock()
+        local generation=parryGeneration
+        local function enabled()
+            return state.alive and state.autoParry and generation==parryGeneration
+        end
+        state.parryQAStatus="TRIGGER | "..sourceName
+        task.spawn(function()
+            local ok,err=pcall(function()
+                if not enabled() then return end
+                myRoot.CFrame = CFrame.lookAt(myRoot.Position, Vector3.new(killerRoot.Position.X, myRoot.Position.Y, killerRoot.Position.Z))
+                local hum = myChar:FindFirstChildOfClass("Humanoid")
+                if not isEquipped and hum then
+                    hum:EquipTool(daggerTool)
+                    task.wait(0.02)
+                end
+                if not enabled() then return end
+                daggerTool:Activate()
+                for _, desc in ipairs(daggerTool:GetDescendants()) do
+                    if desc:IsA("RemoteEvent") then
+                        desc:FireServer()
+                    end
+                end
+                task.wait(0.03)
+                if not enabled() or didParryActivate(daggerTool) then return end
+                local VirtualInputManager=game:GetService("VirtualInputManager")
+                if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
+                    local cam = workspace.CurrentCamera
+                    local cx = cam and (cam.ViewportSize.X * 0.5) or 500
+                    local cy = cam and (cam.ViewportSize.Y * 0.5) or 300
+                    VirtualInputManager:SendTouchEvent(1, 0, cx, cy)
+                    task.wait(0.015)
+                    VirtualInputManager:SendTouchEvent(1, 2, cx, cy)
+                else
+                    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+                    task.wait(0.015)
+                    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+                end
+                task.wait(0.03)
+                if not enabled() or didParryActivate(daggerTool) then return end
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+                task.wait(0.015)
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+            end)
+            if not ok then
+                runtimeLog.record("Auto Parry",err)
+                if enabled() then state.parryQAStatus="ERROR | see runtime diagnostics" end
+            end
+        end)
+    end
+    local function attachKillerListeners(killerChar)
+        if not killerChar then return end
+        table.insert(parryConnections, killerChar.DescendantAdded:Connect(function(desc)
+            if desc:IsA("Sound") then
+                local sName = desc.Name:lower()
+                if sName:find("swing") or sName:find("slash") or sName:find("attack") or sName:find("whoosh") or sName:find("lunge") then
+                    executeWithFallback("Layer2_Sound")
+                end
+            end
+        end))
     end
     local function parryStep()
         if not state.alive or not state.autoParry then return end
-        if game.GameId~=6739698191 then state.parryQAStatus="Unsupported GameId";return end
-        if isItemOnCooldown() then state.parryQAStatus="COOLDOWN";return end
-        local myChar=LocalPlayer.Character
-        local myRoot=myChar and myChar:FindFirstChild("HumanoidRootPart")
-        if not myRoot then return end
-        local killerChar=getKillerCharacter()
-        local killerRoot=killerChar and killerChar:FindFirstChild("HumanoidRootPart")
-        if not killerRoot then state.parryQAStatus="READY | waiting for Killer";return end
-        local dist=(killerRoot.Position-myRoot.Position).Magnitude
-        if dist > state.parryRange then return end
-        local toMe=(myRoot.Position-killerRoot.Position).Unit
-        local closingSpeed=killerRoot.AssemblyLinearVelocity:Dot(toMe)
-        if dist <= state.parryPanic
-            or (dist <= state.parryRange and isKillerAttacking(killerChar))
-            or (dist <= state.parryClosing and closingSpeed > 18) then
-            executeParry()
+        local killerChar = getKillerCharacter()
+        if not killerChar then return end
+        if not hookedKillers[killerChar] then
+            hookedKillers[killerChar]=true
+            attachKillerListeners(killerChar)
         end
+        local myChar = LocalPlayer.Character
+        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        local killerRoot = killerChar:FindFirstChild("HumanoidRootPart")
+        if not myRoot or not killerRoot then return end
+        local dist = (killerRoot.Position - myRoot.Position).Magnitude
+        if dist > state.parryRange then return end
+        local hum = killerChar:FindFirstChildOfClass("Humanoid")
+        local animator = hum and hum:FindFirstChildOfClass("Animator")
+        if animator then
+            for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                local name = track.Name:lower()
+                if not (name:find("walk") or name:find("run") or name:find("idle") or name:find("jump") or name:find("fall") or name:find("vault")) then
+                    if track.Priority == Enum.AnimationPriority.Action
+                        or track.Priority == Enum.AnimationPriority.Action2
+                        or track.Priority == Enum.AnimationPriority.Action3 then
+                        executeWithFallback("Layer3_Anim")
+                        break
+                    end
+                end
+            end
+        end
+    end
+    local function stopParry()
+        parryGeneration += 1
+        for _,conn in ipairs(parryConnections) do
+            pcall(function() conn:Disconnect() end)
+        end
+        table.clear(parryConnections)
+        table.clear(hookedKillers)
     end
     local function guarded(name,fn)
         local ok,err=pcall(fn)
@@ -2222,15 +2279,24 @@ local userActions=(function()
         end
     end
     local function setParry(value: boolean)
+        stopParry()
         state.autoParry=value and state.alive
-        if state.autoParry then
-            state.parryQAStatus="READY"
-            if not parryConn then parryConn=RunService.Heartbeat:Connect(function() guarded("Auto Parry",parryStep) end) end
-        else
-            if parryConn then parryConn:Disconnect();parryConn=nil end
-            cachedParryButton=nil
-            state.parryQAStatus="OFF"
+        if not state.autoParry then state.parryQAStatus="OFF";return end
+        if game.GameId~=6739698191 then state.parryQAStatus="Unsupported GameId";return end
+        state.parryQAStatus="READY"
+        local ReplicatedStorage=game:GetService("ReplicatedStorage")
+        local Remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        local AttacksFolder = Remotes and Remotes:FindFirstChild("Attacks")
+        if AttacksFolder then
+            for _, remote in ipairs(AttacksFolder:GetDescendants()) do
+                if remote:IsA("RemoteEvent") then
+                    table.insert(parryConnections, remote.OnClientEvent:Connect(function()
+                        guarded("Auto Parry remote",function() executeWithFallback("Layer1_Remote") end)
+                    end))
+                end
+            end
         end
+        table.insert(parryConnections,RunService.Heartbeat:Connect(function() guarded("Auto Parry",parryStep) end))
     end
     return {setGenerator=setGenerator,setParry=setParry,stop=function() setGenerator(false);setParry(false) end}
 end)()
@@ -2244,14 +2310,12 @@ registerSlider(Tabs.Survivor,"WhiteZoneOffset","White Zone Offset",
     "Calibration in degrees; supplied default 109.",
     state.whiteZoneOffset,90,130,0,function(v) state.whiteZoneOffset=v end)
 registerToggle(Tabs.Survivor,"AutoParry","Auto Parry",
-    "Original attack detection and item cooldown checks","autoParry",userActions.setParry)
-registerSlider(Tabs.Survivor,"ParryRange","Parry Range","Test detection distance (studs).",
+    "User-supplied 3-layer fail-safe controller","autoParry",userActions.setParry)
+registerSlider(Tabs.Survivor,"ParryRange","Parry Range","Detection distance (studs).",
     state.parryRange,6,25,0,function(v) state.parryRange=v end)
-registerSlider(Tabs.Survivor,"ParryClosing","Parry Closing","Test closing distance (studs).",
-    state.parryClosing,3,25,0,function(v) state.parryClosing=v end)
-registerSlider(Tabs.Survivor,"ParryPanic","Parry Panic","Test near distance (studs).",
-    state.parryPanic,1,12,0,function(v) state.parryPanic=v end)
-registerSlider(Tabs.Survivor,"ParryDebounce","Parry Debounce","Minimum delay between QA events (seconds).",
+registerSlider(Tabs.Survivor,"ParryPanic","Parry Panic","Original parameter; not used by the supplied trigger logic.",
+    state.parryPanic,1,12,1,function(v) state.parryPanic=v end)
+registerSlider(Tabs.Survivor,"ParryDebounce","Parry Debounce","Minimum delay between attempts (seconds).",
     state.parryDebounce,.1,2,2,function(v) state.parryDebounce=v end)
 local qaStatus=Tabs.Survivor:AddParagraph({
     Title="ACTION STATUS",Content="OFF"
@@ -2969,4 +3033,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V5.3.8] Original moonwalk body with controls; Roblox runtime not tested.")
+print("[XandMe V5.3.9] User-supplied fail-safe parry; Roblox runtime not tested.")
