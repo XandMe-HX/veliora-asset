@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V5.3.9 - FAIL-SAFE AUTO PARRY
+    VELION DISTRICT HUB V5.4.0 - LOBBY UI AND PLAYER COLLISION
     For Roblox Violence District - client-side utility module.
     Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -31,7 +31,7 @@ end
 
 local state = {
     alive=true, playerESP=false, objectiveESP=false, npcESP=false,
-    fullbright=false, lightIntensity=100, noFog=false, noClip=false,
+    fullbright=false, lightIntensity=100, noFog=false, noClip=false, noCollisionPlayer=false, playerCollisionStatus="OFF",
     speed=false, speedValue=24, fov=114,
     customFov=false, fovSmoothness=10,fovTurnBoost=5,fovStep=3,fovHotkeys=false,
     smoothCamera=false, cameraTurnTime=0.08,
@@ -191,7 +191,7 @@ local existingOverlay=playerGui:FindFirstChild("VelionDistrictOverlayV4")
 if existingOverlay then existingOverlay:Destroy() end
 local gui=create("ScreenGui",playerGui,{
     Name="VelionDistrictOverlayV4",ResetOnSpawn=false,
-    IgnoreGuiInset=true,DisplayOrder=950,
+    IgnoreGuiInset=true,DisplayOrder=9999,
     ZIndexBehavior=Enum.ZIndexBehavior.Sibling
 })
 local alert=create("TextLabel",gui,{
@@ -232,7 +232,7 @@ local Native,Window=(function()
     }
     local screen=create("ScreenGui",playerGui,{
         Name="VelionDistrictHubV2",ResetOnSpawn=false,IgnoreGuiInset=false,
-        DisplayOrder=949,ZIndexBehavior=Enum.ZIndexBehavior.Sibling
+        DisplayOrder=10000,ZIndexBehavior=Enum.ZIndexBehavior.Sibling
     })
     local function stroke(item)
         create("UIStroke",item,{Color=C.border,Thickness=1,ApplyStrokeMode=Enum.ApplyStrokeMode.Border})
@@ -292,7 +292,7 @@ local Native,Window=(function()
     local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0,Active=true})
     local brand=text(header,"XandMe.",26,true)
     brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-144,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
-    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3.9",10,false,C.muted)
+    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.4.0",10,false,C.muted)
     subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-144,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
     local minimize=btn(header,"−",34,30)
     minimize.AnchorPoint=Vector2.new(1,.5);minimize.Position=UDim2.new(1,-78,.5,0)
@@ -313,7 +313,7 @@ local Native,Window=(function()
         Position=UDim2.new(.24,0,0,63),Size=UDim2.new(.76,0,1,-63),
         BackgroundColor3=C.black,BackgroundTransparency=0,BorderSizePixel=0
     })
-    local window={Root=root,Minimized=false,Tabs={}}
+    local window={Root=root,Screen=screen,Minimized=false,Tabs={}}
     function window:Minimize()
         self.Minimized=not self.Minimized
         root.Visible=not self.Minimized
@@ -322,6 +322,17 @@ local Native,Window=(function()
         local cleanup=environment.VelionVDCleanup
         if type(cleanup)=="function" then cleanup() end
     end
+    local reopen=btn(screen,"XandMe",86,34)
+    reopen.Name="XandMeReopen"
+    reopen.Position=UDim2.new(0,12,.5,-17)
+    reopen.Visible=false
+    bindClick(reopen,"reopen",function()
+        window.Minimized=false
+        root.Visible=true
+    end)
+    connect(root:GetPropertyChangedSignal("Visible"),function()
+        reopen.Visible=not root.Visible
+    end)
     bindClick(minimize,"minimize",function() window:Minimize() end)
     bindClick(close,"unload",function() window:Close() end)
     connect(UserInputService.InputBegan,function(input)
@@ -1527,6 +1538,95 @@ local function updateSpeed()
         end
     end
 end
+-- Pairwise local character constraints; never change map or body CanCollide.
+local playerCollision=(function()
+    local conn: RBXScriptConnection?=nil
+    local folder: Folder?=nil
+    local pairsByPart: {[BasePart]: {[BasePart]: NoCollisionConstraint}}={}
+    local lastUpdate=-math.huge
+    local function clear()
+        if folder then folder:Destroy();folder=nil end
+        table.clear(pairsByPart)
+    end
+    local function bodyParts(character: Model): {BasePart}
+        local parts={}
+        for _,part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") and part.CanCollide
+                and not part:FindFirstAncestorOfClass("Tool")
+                and not part:FindFirstAncestorOfClass("Accessory") then
+                parts[#parts+1]=part
+            end
+        end
+        return parts
+    end
+    local function refresh()
+        if not state.alive or not state.noCollisionPlayer then return end
+        local now=os.clock()
+        if now-lastUpdate<.15 then return end
+        lastUpdate=now
+        local char=player.Character
+        if not char or not char:IsDescendantOf(Workspace) then
+            clear();state.playerCollisionStatus="WAITING | character";return
+        end
+        if folder and folder.Parent~=char then clear() end
+        if not folder then
+            folder=Instance.new("Folder")
+            folder.Name="VelionPlayerCollision"
+            folder.Parent=char
+        end
+        local localParts=bodyParts(char)
+        local keep={}
+        local count=0
+        for _,other in ipairs(Players:GetPlayers()) do
+            local target=other.Character
+            if other~=player and target and target:IsDescendantOf(Workspace) then
+                local targetParts=bodyParts(target)
+                for _,a in ipairs(localParts) do
+                    local row=pairsByPart[a]
+                    if not row then row={};pairsByPart[a]=row end
+                    local wanted=keep[a]
+                    if not wanted then wanted={};keep[a]=wanted end
+                    for _,b in ipairs(targetParts) do
+                        wanted[b]=true
+                        local constraint=row[b]
+                        if not constraint or not constraint.Parent then
+                            constraint=Instance.new("NoCollisionConstraint")
+                            constraint.Part0=a
+                            constraint.Part1=b
+                            constraint.Parent=folder
+                            row[b]=constraint
+                        end
+                        count+=1
+                    end
+                end
+            end
+        end
+        for a,row in pairs(pairsByPart) do
+            for b,constraint in pairs(row) do
+                if not keep[a] or not keep[a][b] then constraint:Destroy();row[b]=nil end
+            end
+            if next(row)==nil then pairsByPart[a]=nil end
+        end
+        state.playerCollisionStatus=string.format("LOCAL | %d pairs",count)
+    end
+    local function setEnabled(value: boolean)
+        state.noCollisionPlayer=value and state.alive
+        if not state.noCollisionPlayer then
+            if conn then conn:Disconnect();conn=nil end
+            clear();state.playerCollisionStatus="OFF";return
+        end
+        lastUpdate=-math.huge
+        state.playerCollisionStatus="READY"
+        if not conn then
+            conn=RunService.Heartbeat:Connect(function()
+                local ok,err=pcall(refresh)
+                if not ok then runtimeLog.record("player collision",err);state.playerCollisionStatus="ERROR | diagnostics" end
+            end)
+        end
+    end
+    return {setEnabled=setEnabled}
+end)()
+
 -- Camera comfort: native camera remains responsible for position, input and occlusion.
 -- Only angular presentation and inward-clamped zoom recovery are filtered.
 local cameraController=(function()
@@ -2331,14 +2431,19 @@ local skillStatus=Tabs.Survivor:AddParagraph({
 
 local movementDiagnostics=Tabs.Movement:AddParagraph({
     Title="MOVEMENT DIAGNOSTICS",
-    Content="Native movement retained. NoClip and forced WalkSpeed are disabled in this build."
+    Content="Player-only local collision option; map collision and native WalkSpeed retained."
 })
+registerToggle(Tabs.Movement,"NoCollisionPlayer","No Collision Player",
+    "Local character-to-character collision only; server behavior unverified.",
+    "noCollisionPlayer",playerCollision.setEnabled)
+local collisionStatusBox=Tabs.Movement:AddParagraph({Title="PLAYER COLLISION",Content="OFF"})
 Tabs.Movement:AddButton({
     Title="Reset Movement",
     Description="Disable local movement assists and restore their original settings.",
     Callback=function()
         setNoClip(false)
         setSpeed(false)
+        if toggles.NoCollisionPlayer then toggles.NoCollisionPlayer:SetValue(false) end
         if toggles.MoonwalkAD then toggles.MoonwalkAD:SetValue(false) end
     end
 })
@@ -2452,7 +2557,7 @@ local cursorRelease=create("TextButton",gui,{
 local savedMouseBehavior=nil
 local savedMouseIcon=nil
 local function syncCursor()
-    local open=Window.Root.Parent~=nil and Window.Root.Visible
+    local open=Window.Root.Parent~=nil and Window.Screen.Parent~=nil and Window.Screen.Enabled and Window.Root.Visible
     local release=state.alive and (open or manualCursor)
     cursorModal.Visible=state.alive and open
     cursorRelease.Visible=state.alive and manualCursor and not open
@@ -2589,12 +2694,56 @@ connect(Window.Root:GetPropertyChangedSignal("Visible"),function()
     ok,err=pcall(syncCursor)
     if not ok then runtimeLog.record("cursor",err) end
 end)
-connect(player.CharacterAdded,function()
-    task.defer(function()
-        if not state.alive then return end
-        local ok,err=pcall(syncCursor)
-        if not ok then runtimeLog.record("cursor",err) end
+-- Revalidate only our UI after lobby/round transitions. Do not modify game UI.
+local menuCursorBinding="VelionMenuCursor_"..player.UserId
+local function recoverMenu()
+    if not state.alive then return end
+    local currentGui=player:FindFirstChildOfClass("PlayerGui")
+    if not currentGui then return end
+    local ok,err=pcall(function()
+        if Window.Screen.Parent~=currentGui then Window.Screen.Parent=currentGui end
+        if gui.Parent~=currentGui then gui.Parent=currentGui end
+        Window.Screen.Enabled=true
+        gui.Enabled=true
+        Window.Screen.ResetOnSpawn=false
+        gui.ResetOnSpawn=false
+        Window.Screen.DisplayOrder=10000
+        gui.DisplayOrder=9999
+        if Window.Root.Parent~=Window.Screen then Window.Root.Parent=Window.Screen end
+        syncCursor()
     end)
+    if not ok then runtimeLog.record("lobby UI recovery",err) end
+end
+local function queueMenuRecovery()
+    task.defer(recoverMenu)
+    task.delay(.35,recoverMenu)
+    task.delay(1,recoverMenu)
+end
+connect(player.CharacterAdded,queueMenuRecovery)
+connect(player.CharacterRemoving,queueMenuRecovery)
+connect(player:GetPropertyChangedSignal("Team"),queueMenuRecovery)
+connect(player.ChildAdded,function(child)
+    if child:IsA("PlayerGui") then queueMenuRecovery() end
+end)
+local lastMenuRecovery=0
+connect(RunService.Heartbeat,function()
+    if not state.alive then return end
+    local now=os.clock()
+    if now-lastMenuRecovery<.5 then return end
+    lastMenuRecovery=now
+    if not Window.Screen.Parent or not Window.Screen.Enabled or not gui.Parent or not gui.Enabled then recoverMenu() end
+end)
+RunService:BindToRenderStep(menuCursorBinding,Enum.RenderPriority.Last.Value+5,function()
+    if not state.alive then return end
+    if Window.Root.Visible and Window.Screen.Parent and Window.Screen.Enabled or manualCursor then
+        if UserInputService.MouseEnabled then
+            if UserInputService.MouseBehavior~=Enum.MouseBehavior.Default then
+                savedMouseBehavior=UserInputService.MouseBehavior
+            end
+            if not UserInputService.MouseIconEnabled then savedMouseIcon=false end
+            syncCursor()
+        end
+    end
 end)
 local function stopCursor()
     manualCursor=false
@@ -2610,7 +2759,7 @@ local function restoreNativeControls(closeMenu)
         local ok,err=pcall(fn)
         if not ok then failures[#failures+1]=name..": "..tostring(err):sub(1,100) end
     end
-    for _,id in ipairs({"CustomFov","SmoothCamera","SmoothZoom","MoonwalkAD","ReleaseCursor"}) do
+    for _,id in ipairs({"CustomFov","SmoothCamera","SmoothZoom","MoonwalkAD","NoCollisionPlayer","ReleaseCursor"}) do
         local toggle=toggles[id]
         if toggle then
             state[toggleStateKeys[id]]=false
@@ -2620,6 +2769,7 @@ local function restoreNativeControls(closeMenu)
     attempt("camera",cameraController.shutdown)
     attempt("moonwalk",function() setMoonwalk(false) end)
     attempt("collision",function() setNoClip(false) end)
+    attempt("player collision",function() playerCollision.setEnabled(false) end)
     attempt("speed",function() setSpeed(false) end)
     manualCursor=false
     state.manualCursor=false
@@ -2965,13 +3115,14 @@ connect(RunService.Heartbeat,function()
     qaStatus:SetDesc("Generator: "..state.skillQAStatus.."\nParry: "..state.parryQAStatus)
     npcStatus:SetDesc(state.npcESP and string.format("%s | detected: %d | marked: %d",RunService:IsStudio() and "Studio rig discovery" or "Tagged NPCs",state.npcFound,state.npcVisible) or "OFF")
     moonwalkStatusBox:SetDesc(state.moonwalkStatus)
+    collisionStatusBox:SetDesc(state.playerCollisionStatus)
     local hum=char and char:FindFirstChildOfClass("Humanoid")
     local velocity=root and root:IsA("BasePart") and root.AssemblyLinearVelocity or Vector3.zero
     local horizontal=Vector3.new(velocity.X,0,velocity.Z).Magnitude
     local pingText="unavailable"
     local pingOK,ping=pcall(function() return player:GetNetworkPing() end)
     if pingOK and type(ping)=="number" then pingText=string.format("%.0f ms (one-way estimate)",ping*1000) end
-    movementDiagnostics:SetDesc(string.format("FPS: %d | Network: %s\nNative WalkSpeed: %.1f | Horizontal velocity: %.1f studs/s\nNo movement override is applied by NoClip or Speed Assist.",state.fps,pingText,hum and hum.WalkSpeed or 0,horizontal))
+    movementDiagnostics:SetDesc(string.format("FPS: %d | Network: %s\nNative WalkSpeed: %.1f | Horizontal velocity: %.1f studs/s\nPlayer collision: "..state.playerCollisionStatus.."",state.fps,pingText,hum and hum.WalkSpeed or 0,horizontal))
 end)
 
 -- Existing session event cleanup.
@@ -3019,11 +3170,13 @@ local function cleanup()
         objectiveVisuals[obj]=nil
     end
     attempt("collision",function() setNoClip(false) end)
+    attempt("player collision",function() playerCollision.setEnabled(false) end)
     state.fullbright=false
     state.noFog=false
     if restoreLighting then attempt("lighting",updateLighting) end
     attempt("speed",function() setSpeed(false) end)
     attempt("camera",cameraController.shutdown)
+    attempt("menu cursor binding",function() RunService:UnbindFromRenderStep(menuCursorBinding) end)
     attempt("cursor",stopCursor)
     attempt("overlay",function() gui:Destroy() end)
     attempt("interface",function() Native:Destroy() end)
@@ -3033,4 +3186,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V5.3.9] User-supplied fail-safe parry; Roblox runtime not tested.")
+print("[XandMe V5.4.0] Lobby UI recovery and local player collision; Roblox runtime not tested.")
