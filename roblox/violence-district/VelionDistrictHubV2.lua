@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V5.4.0 - LOBBY UI AND PLAYER COLLISION
+    VELION DISTRICT HUB V5.4.1 - COMPACT ESP LABELS
     For Roblox Violence District - client-side utility module.
     Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -59,7 +59,9 @@ local state = {
     abilitySignalsObserved=0, abilityNotificationCount=0,
     lastRoleTransition="None detected",
     roleTransitions=0, trackedPlayers=0,
-    maxWorldLabels=22, maxWorldHighlights=20, objectLabels=false, objectNames=true,
+    maxWorldLabels=22, maxWorldHighlights=20, objectLabels=false,
+    generatorNameESP=true,palletNameESP=true,windowNameESP=true,
+    hookNameESP=true,gateNameESP=true,itemNameESP=true,
     scanCandidates=0, scanScanned=0, scanDurationMs=0,
     visibleLabels=0, visibleHighlights=0, fps=60,
     highlightBudgetAvailable=20, objectiveOrder=0, npcFound=0, npcVisible=0,
@@ -153,8 +155,9 @@ end
 -- emulate the surface. The optional Lighting blur affects the whole scene.
 
 local espColors={
-    Killer=Color3.fromRGB(255,80,91),
-    Survivor=Color3.fromRGB(78,173,252),
+    Killer=Color3.fromRGB(255,45,55),
+    Survivor=Color3.fromRGB(70,235,120),
+    Unassigned=Color3.fromRGB(255,218,70),
     Generator=Color3.fromRGB(194,108,255),
     Pallet=Color3.fromRGB(255,196,86),
     Window=Color3.fromRGB(95,233,223),
@@ -292,7 +295,7 @@ local Native,Window=(function()
     local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0,Active=true})
     local brand=text(header,"XandMe.",26,true)
     brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-144,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
-    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.4.0",10,false,C.muted)
+    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.4.1",10,false,C.muted)
     subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-144,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
     local minimize=btn(header,"−",34,30)
     minimize.AnchorPoint=Vector2.new(1,.5);minimize.Position=UDim2.new(1,-78,.5,0)
@@ -906,7 +909,10 @@ local function ensurePlayerVisual(other)
         removePlayerVisual(other);return
     end
     local role,color="NPC",espColors.Unknown
-    if not isNPC then role,color=roleOf(other) end
+    if not isNPC then
+        role,color=roleOf(other)
+        if role=="Unknown" then color=espColors.Unassigned end
+    end
     local root=player.Character and player.Character:FindFirstChild("HumanoidRootPart")
     local targetRoot=character:FindFirstChild("HumanoidRootPart") or head
     local distance=(root and root:IsA("BasePart") and targetRoot:IsA("BasePart"))
@@ -923,14 +929,16 @@ local function ensurePlayerVisual(other)
     if not existing then
         local billboard=create("BillboardGui",playerGui,{
             Name="VelionVDPlayerTag",Adornee=head,
-            AlwaysOnTop=not isNPC,Size=UDim2.fromOffset(205,62),
+            AlwaysOnTop=not isNPC,Size=UDim2.fromOffset(180,52),
             StudsOffsetWorldSpace=Vector3.new(0,2.5,0),
             MaxDistance=650
         })
-        local textLabel=label(billboard,"",0,0,205,62,11)
+        local textLabel=label(billboard,"",0,0,180,52,10)
+        textLabel.Font=Enum.Font.GothamBold
         textLabel.TextXAlignment=Enum.TextXAlignment.Center
         textLabel.TextStrokeTransparency=.25
-        local pointer=label(gui,"",0,0,185,43,11,espColors.Killer)
+        local pointer=label(gui,"",0,0,185,43,10,espColors.Killer)
+        pointer.Font=Enum.Font.GothamBold
         pointer.TextXAlignment=Enum.TextXAlignment.Center
         pointer.TextStrokeTransparency=.2
         pointer.Visible=false
@@ -1090,6 +1098,15 @@ local function objectiveEnabled(key: string): boolean
     if key=="item" then return state.worldItemsESP end
     return false
 end
+local function objectiveNameEnabled(key: string): boolean
+    if key=="generator" then return state.generatorNameESP end
+    if key=="pallet" then return state.palletNameESP end
+    if key=="window" then return state.windowNameESP end
+    if key=="hook" then return state.hookNameESP end
+    if key=="gate" then return state.gateNameESP end
+    if key=="item" then return state.itemNameESP end
+    return false
+end
 local function inScope(item: Instance): boolean
     local root: Instance?=nil
     if currentMap and item:IsDescendantOf(currentMap) then
@@ -1233,12 +1250,13 @@ local function makeObjectiveNodes(rec,showLabel,showOutline)
     if showLabel and not rec.gui then
         local board=create("BillboardGui",playerGui,{
             Name="VelionVDObjective",Adornee=rec.part,
-            Size=UDim2.fromOffset(160,30),AlwaysOnTop=true,
+            Size=UDim2.fromOffset(140,24),AlwaysOnTop=true,
             Enabled=false,MaxDistance=state.espDistance,
             StudsOffsetWorldSpace=Vector3.new(0,3,0)
         })
         local tag=label(board,rec.kind.name:upper(),
-            0,0,160,30,12,categoryColor(rec.kind.key))
+            0,0,140,24,10,categoryColor(rec.kind.key))
+        tag.Font=Enum.Font.GothamBold
         tag.TextXAlignment=Enum.TextXAlignment.Center
         tag.TextStrokeTransparency=.25
         rec.gui=board
@@ -1370,7 +1388,7 @@ local function refreshObjectiveVisibility()
     state.progressUnknown=0
     for _,entry in ipairs(candidates) do
         local rec=entry.rec
-        if state.objectLabels and labels<state.maxWorldLabels then
+        if state.objectLabels and objectiveNameEnabled(rec.kind.key) and labels<state.maxWorldLabels then
             selectedLabels[rec]=true
             labels+=1
         end
@@ -2010,7 +2028,7 @@ local function syncObjectESP()
         or state.hookESP or state.gateESP or state.worldItemsESP
     local previous=state.objectiveESP
     state.objectiveESP=active
-    state.objectLabels=active and state.objectNames
+    state.objectLabels=active
     state.objectHighlight=active
     state.generatorProgressESP=state.generatorESP
     if active and not previous then
@@ -2024,28 +2042,37 @@ local function syncObjectESP()
     lastObjectiveRefresh=0
     refreshObjectiveVisibility()
 end
-registerToggle(Tabs.Objects,"ObjectNames","Object Name ESP",
-    "Show or hide all object labels without disabling outlines","objectNames",
-    function(value)
-        state.objectLabels=state.objectiveESP and value
-        lastObjectiveRefresh=0
-        refreshObjectiveVisibility()
-    end)
+local function refreshObjectNames()
+    lastObjectiveRefresh=-math.huge
+    refreshObjectiveVisibility()
+end
 registerToggle(Tabs.Objects,"GeneratorESP","Generator ESP",
-    "Highlight + name + repair progress when available","generatorESP",syncObjectESP)
+    "Show object highlight; name controlled separately","generatorESP",syncObjectESP)
+registerToggle(Tabs.Objects,"GeneratorNameESP","Generator Name ESP",
+    "Show name and repair progress when available","generatorNameESP",refreshObjectNames)
 registerToggle(Tabs.Objects,"PalletESP","Pallet ESP",
-    "Highlight + name","palletESP",syncObjectESP)
+    "Show object highlight; name controlled separately","palletESP",syncObjectESP)
+registerToggle(Tabs.Objects,"PalletNameESP","Pallet Name ESP",
+    "Show pallet text without changing its highlight","palletNameESP",refreshObjectNames)
 registerToggle(Tabs.Objects,"WindowESP","Window ESP",
-    "Highlight + name","windowESP",syncObjectESP)
+    "Show object highlight; name controlled separately","windowESP",syncObjectESP)
+registerToggle(Tabs.Objects,"WindowNameESP","Window Name ESP",
+    "Show window text without changing its highlight","windowNameESP",refreshObjectNames)
 registerToggle(Tabs.Objects,"HookESP","Hook ESP",
-    "Highlight + name","hookESP",syncObjectESP)
+    "Show object highlight; name controlled separately","hookESP",syncObjectESP)
+registerToggle(Tabs.Objects,"HookNameESP","Hook Name ESP",
+    "Show hook text without changing its highlight","hookNameESP",refreshObjectNames)
 registerToggle(Tabs.Objects,"GateESP","Gate ESP",
-    "Highlight + name","gateESP",syncObjectESP)
+    "Show object highlight; name controlled separately","gateESP",syncObjectESP)
+registerToggle(Tabs.Objects,"GateNameESP","Gate Name ESP",
+    "Show gate text without changing its highlight","gateNameESP",refreshObjectNames)
 registerToggle(Tabs.Objects,"WorldItems","Item ESP",
-    "Highlight + name","worldItemsESP",syncObjectESP)
+    "Show object highlight; name controlled separately","worldItemsESP",syncObjectESP)
+registerToggle(Tabs.Objects,"ItemNameESP","Item Name ESP",
+    "Show item text without changing its highlight","itemNameESP",refreshObjectNames)
 local espSettings=Tabs.Settings:AddSection("ESP Settings")
-for _,category in ipairs({"Killer","Survivor","Unknown","Generator","Pallet","Window","Hook","Gate","Item"}) do
-    local colorName=category=="Unknown" and "Neutral / NPC" or category
+for _,category in ipairs({"Killer","Survivor","Unassigned","Unknown","Generator","Pallet","Window","Hook","Gate","Item"}) do
+    local colorName=category=="Unknown" and "Neutral / NPC" or category=="Unassigned" and "Unassigned Player" or category
     registerColor(espSettings,category.."Color",colorName.." Color",category)
 end
 local itemInfo=espSettings:AddParagraph({
@@ -2939,6 +2966,9 @@ do
             if type(data)~="table" then return end
             for id,obj in pairs(controls) do
                 local v=data[id]
+                -- Migrate only previous stock role colors, preserving other custom colors.
+                if id=="SurvivorColor" and type(v)=="string" and v:upper()=="#4EADFC" then v="#46EB78" end
+                if id=="KillerColor" and type(v)=="string" and v:upper()=="#FF505B" then v="#FF2D37" end
                 if obj.Type=="Slider" and type(v)=="number" then obj:SetValue(v)
                 elseif (obj.Type=="Dropdown" or obj.Type=="Colorpicker") and type(v)=="string" then obj:SetValue(v) end
             end
@@ -3186,4 +3216,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V5.4.0] Lobby UI recovery and local player collision; Roblox runtime not tested.")
+print("[XandMe V5.4.1] Compact bold ESP and independent name controls; Roblox runtime not tested.")
