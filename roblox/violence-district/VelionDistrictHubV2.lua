@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V5.3.7 - ORIGINAL USER CONTROLLERS
+    VELION DISTRICT HUB V5.4.2 - USER FEATURES
     For Roblox Violence District - client-side utility module.
     Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -31,12 +31,12 @@ end
 
 local state = {
     alive=true, playerESP=false, objectiveESP=false, npcESP=false,
-    fullbright=false, lightIntensity=100, noFog=false, noClip=false,
+    fullbright=false, lightIntensity=100, noFog=false, noClip=false, noCollisionPlayer=false, playerCollisionStatus="OFF",
     speed=false, speedValue=24, fov=114,
     customFov=false, fovSmoothness=10,fovTurnBoost=5,fovStep=3,fovHotkeys=false,
     smoothCamera=false, cameraTurnTime=0.08,
     smoothZoom=false, cameraZoomTime=0.18,
-    moonwalk=false, moonwalkSteer=.28,
+    moonwalk=false, moonwalkResponsiveness=28, moonwalkMaxTorque=50000, moonwalkWiggleSpeed=48, moonwalkWiggleAngle=18,
     moonwalkStatus="OFF | assign a shortcut in Settings",
     killerAlert=false, offscreenESP=false, hidden=false, scanProgress="Disabled",
     expanded=true, activeTab="Home", sceneBlur=false,
@@ -47,7 +47,7 @@ local state = {
     playerMask=false, chaseStatus=false, knockedStatus=false, hookedStatus=false,
     playerHighlight=false, objectHighlight=false, highlightMode="Outline", nextKiller=false, skillMonitor=false,
     autoSkillCheck=false, whiteZoneOffset=109, skillQAStatus="OFF",
-    autoParry=false, parryRange=14,parryClosing=12,parryPanic=6,parryDebounce=.4,parryQAStatus="OFF",
+    autoParry=false, antiBlind=false, antiAFK=false, noFall=false, noSlow=false, parryQAStatus="OFF",
     inputStatus="User-supplied input controller",
     generatorESP=false, palletESP=false, windowESP=false, hookESP=false,
     gateESP=false, generatorProgressESP=false, espDistance=650,
@@ -59,7 +59,9 @@ local state = {
     abilitySignalsObserved=0, abilityNotificationCount=0,
     lastRoleTransition="None detected",
     roleTransitions=0, trackedPlayers=0,
-    maxWorldLabels=22, maxWorldHighlights=20, objectLabels=false, objectNames=true,
+    maxWorldLabels=22, maxWorldHighlights=20, objectLabels=false,
+    generatorNameESP=true,palletNameESP=true,windowNameESP=true,
+    hookNameESP=true,gateNameESP=true,itemNameESP=true,
     scanCandidates=0, scanScanned=0, scanDurationMs=0,
     visibleLabels=0, visibleHighlights=0, fps=60,
     highlightBudgetAvailable=20, objectiveOrder=0, npcFound=0, npcVisible=0,
@@ -153,8 +155,9 @@ end
 -- emulate the surface. The optional Lighting blur affects the whole scene.
 
 local espColors={
-    Killer=Color3.fromRGB(255,80,91),
-    Survivor=Color3.fromRGB(78,173,252),
+    Killer=Color3.fromRGB(255,45,55),
+    Survivor=Color3.fromRGB(70,235,120),
+    Unassigned=Color3.fromRGB(255,218,70),
     Generator=Color3.fromRGB(194,108,255),
     Pallet=Color3.fromRGB(255,196,86),
     Window=Color3.fromRGB(95,233,223),
@@ -191,7 +194,7 @@ local existingOverlay=playerGui:FindFirstChild("VelionDistrictOverlayV4")
 if existingOverlay then existingOverlay:Destroy() end
 local gui=create("ScreenGui",playerGui,{
     Name="VelionDistrictOverlayV4",ResetOnSpawn=false,
-    IgnoreGuiInset=true,DisplayOrder=950,
+    IgnoreGuiInset=true,DisplayOrder=9999,
     ZIndexBehavior=Enum.ZIndexBehavior.Sibling
 })
 local alert=create("TextLabel",gui,{
@@ -232,7 +235,7 @@ local Native,Window=(function()
     }
     local screen=create("ScreenGui",playerGui,{
         Name="VelionDistrictHubV2",ResetOnSpawn=false,IgnoreGuiInset=false,
-        DisplayOrder=949,ZIndexBehavior=Enum.ZIndexBehavior.Sibling
+        DisplayOrder=10000,ZIndexBehavior=Enum.ZIndexBehavior.Sibling
     })
     local function stroke(item)
         create("UIStroke",item,{Color=C.border,Thickness=1,ApplyStrokeMode=Enum.ApplyStrokeMode.Border})
@@ -292,7 +295,7 @@ local Native,Window=(function()
     local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0,Active=true})
     local brand=text(header,"XandMe.",26,true)
     brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-144,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
-    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.3.7",10,false,C.muted)
+    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.4.2",10,false,C.muted)
     subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-144,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
     local minimize=btn(header,"−",34,30)
     minimize.AnchorPoint=Vector2.new(1,.5);minimize.Position=UDim2.new(1,-78,.5,0)
@@ -313,7 +316,7 @@ local Native,Window=(function()
         Position=UDim2.new(.24,0,0,63),Size=UDim2.new(.76,0,1,-63),
         BackgroundColor3=C.black,BackgroundTransparency=0,BorderSizePixel=0
     })
-    local window={Root=root,Minimized=false,Tabs={}}
+    local window={Root=root,Screen=screen,Minimized=false,Tabs={}}
     function window:Minimize()
         self.Minimized=not self.Minimized
         root.Visible=not self.Minimized
@@ -322,6 +325,17 @@ local Native,Window=(function()
         local cleanup=environment.VelionVDCleanup
         if type(cleanup)=="function" then cleanup() end
     end
+    local reopen=btn(screen,"XandMe",86,34)
+    reopen.Name="XandMeReopen"
+    reopen.Position=UDim2.new(0,12,.5,-17)
+    reopen.Visible=false
+    bindClick(reopen,"reopen",function()
+        window.Minimized=false
+        root.Visible=true
+    end)
+    connect(root:GetPropertyChangedSignal("Visible"),function()
+        reopen.Visible=not root.Visible
+    end)
     bindClick(minimize,"minimize",function() window:Minimize() end)
     bindClick(close,"unload",function() window:Close() end)
     connect(UserInputService.InputBegan,function(input)
@@ -745,7 +759,6 @@ end
 local playerVisuals={}
 local objectiveVisuals={}
 local originalsCollision=setmetatable({}, {__mode="k"})
-local originalWalkSpeed=setmetatable({}, {__mode="k"})
 local function gameValue(object,name)
     if not object then return nil end
     local value=object:GetAttribute(name)
@@ -895,7 +908,10 @@ local function ensurePlayerVisual(other)
         removePlayerVisual(other);return
     end
     local role,color="NPC",espColors.Unknown
-    if not isNPC then role,color=roleOf(other) end
+    if not isNPC then
+        role,color=roleOf(other)
+        if role=="Unknown" then color=espColors.Unassigned end
+    end
     local root=player.Character and player.Character:FindFirstChild("HumanoidRootPart")
     local targetRoot=character:FindFirstChild("HumanoidRootPart") or head
     local distance=(root and root:IsA("BasePart") and targetRoot:IsA("BasePart"))
@@ -912,14 +928,16 @@ local function ensurePlayerVisual(other)
     if not existing then
         local billboard=create("BillboardGui",playerGui,{
             Name="VelionVDPlayerTag",Adornee=head,
-            AlwaysOnTop=not isNPC,Size=UDim2.fromOffset(205,62),
+            AlwaysOnTop=not isNPC,Size=UDim2.fromOffset(180,52),
             StudsOffsetWorldSpace=Vector3.new(0,2.5,0),
             MaxDistance=650
         })
-        local textLabel=label(billboard,"",0,0,205,62,11)
+        local textLabel=label(billboard,"",0,0,180,52,10)
+        textLabel.Font=Enum.Font.GothamBold
         textLabel.TextXAlignment=Enum.TextXAlignment.Center
         textLabel.TextStrokeTransparency=.25
-        local pointer=label(gui,"",0,0,185,43,11,espColors.Killer)
+        local pointer=label(gui,"",0,0,185,43,10,espColors.Killer)
+        pointer.Font=Enum.Font.GothamBold
         pointer.TextXAlignment=Enum.TextXAlignment.Center
         pointer.TextStrokeTransparency=.2
         pointer.Visible=false
@@ -1079,6 +1097,15 @@ local function objectiveEnabled(key: string): boolean
     if key=="item" then return state.worldItemsESP end
     return false
 end
+local function objectiveNameEnabled(key: string): boolean
+    if key=="generator" then return state.generatorNameESP end
+    if key=="pallet" then return state.palletNameESP end
+    if key=="window" then return state.windowNameESP end
+    if key=="hook" then return state.hookNameESP end
+    if key=="gate" then return state.gateNameESP end
+    if key=="item" then return state.itemNameESP end
+    return false
+end
 local function inScope(item: Instance): boolean
     local root: Instance?=nil
     if currentMap and item:IsDescendantOf(currentMap) then
@@ -1222,12 +1249,13 @@ local function makeObjectiveNodes(rec,showLabel,showOutline)
     if showLabel and not rec.gui then
         local board=create("BillboardGui",playerGui,{
             Name="VelionVDObjective",Adornee=rec.part,
-            Size=UDim2.fromOffset(160,30),AlwaysOnTop=true,
+            Size=UDim2.fromOffset(140,24),AlwaysOnTop=true,
             Enabled=false,MaxDistance=state.espDistance,
             StudsOffsetWorldSpace=Vector3.new(0,3,0)
         })
         local tag=label(board,rec.kind.name:upper(),
-            0,0,160,30,12,categoryColor(rec.kind.key))
+            0,0,140,24,10,categoryColor(rec.kind.key))
+        tag.Font=Enum.Font.GothamBold
         tag.TextXAlignment=Enum.TextXAlignment.Center
         tag.TextStrokeTransparency=.25
         rec.gui=board
@@ -1359,7 +1387,7 @@ local function refreshObjectiveVisibility()
     state.progressUnknown=0
     for _,entry in ipairs(candidates) do
         local rec=entry.rec
-        if state.objectLabels and labels<state.maxWorldLabels then
+        if state.objectLabels and objectiveNameEnabled(rec.kind.key) and labels<state.maxWorldLabels then
             selectedLabels[rec]=true
             labels+=1
         end
@@ -1514,19 +1542,95 @@ local function updateNoClip()
         end
     end
 end
-local function updateSpeed()
-    if not state.speed then return end
-    local character=player.Character
-    local hum=character and character:FindFirstChildOfClass("Humanoid")
-    if hum and hum.Health>0 then
-        if originalWalkSpeed[hum]==nil then
-            originalWalkSpeed[hum]=hum.WalkSpeed
+-- Pairwise local character constraints; never change map or body CanCollide.
+local playerCollision=(function()
+    local conn: RBXScriptConnection?=nil
+    local folder: Folder?=nil
+    local pairsByPart: {[BasePart]: {[BasePart]: NoCollisionConstraint}}={}
+    local lastUpdate=-math.huge
+    local function clear()
+        if folder then folder:Destroy();folder=nil end
+        table.clear(pairsByPart)
+    end
+    local function bodyParts(character: Model): {BasePart}
+        local parts={}
+        for _,part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") and part.CanCollide
+                and not part:FindFirstAncestorOfClass("Tool")
+                and not part:FindFirstAncestorOfClass("Accessory") then
+                parts[#parts+1]=part
+            end
         end
-        if hum.WalkSpeed~=state.speedValue then
-            hum.WalkSpeed=state.speedValue
+        return parts
+    end
+    local function refresh()
+        if not state.alive or not state.noCollisionPlayer then return end
+        local now=os.clock()
+        if now-lastUpdate<.15 then return end
+        lastUpdate=now
+        local char=player.Character
+        if not char or not char:IsDescendantOf(Workspace) then
+            clear();state.playerCollisionStatus="WAITING | character";return
+        end
+        if folder and folder.Parent~=char then clear() end
+        if not folder then
+            folder=Instance.new("Folder")
+            folder.Name="VelionPlayerCollision"
+            folder.Parent=char
+        end
+        local localParts=bodyParts(char)
+        local keep={}
+        local count=0
+        for _,other in ipairs(Players:GetPlayers()) do
+            local target=other.Character
+            if other~=player and target and target:IsDescendantOf(Workspace) then
+                local targetParts=bodyParts(target)
+                for _,a in ipairs(localParts) do
+                    local row=pairsByPart[a]
+                    if not row then row={};pairsByPart[a]=row end
+                    local wanted=keep[a]
+                    if not wanted then wanted={};keep[a]=wanted end
+                    for _,b in ipairs(targetParts) do
+                        wanted[b]=true
+                        local constraint=row[b]
+                        if not constraint or not constraint.Parent then
+                            constraint=Instance.new("NoCollisionConstraint")
+                            constraint.Part0=a
+                            constraint.Part1=b
+                            constraint.Parent=folder
+                            row[b]=constraint
+                        end
+                        count+=1
+                    end
+                end
+            end
+        end
+        for a,row in pairs(pairsByPart) do
+            for b,constraint in pairs(row) do
+                if not keep[a] or not keep[a][b] then constraint:Destroy();row[b]=nil end
+            end
+            if next(row)==nil then pairsByPart[a]=nil end
+        end
+        state.playerCollisionStatus=string.format("LOCAL | %d pairs",count)
+    end
+    local function setEnabled(value: boolean)
+        state.noCollisionPlayer=value and state.alive
+        if not state.noCollisionPlayer then
+            if conn then conn:Disconnect();conn=nil end
+            clear();state.playerCollisionStatus="OFF";return
+        end
+        lastUpdate=-math.huge
+        state.playerCollisionStatus="READY"
+        if not conn then
+            conn=RunService.Heartbeat:Connect(function()
+                local ok,err=pcall(refresh)
+                if not ok then runtimeLog.record("player collision",err);state.playerCollisionStatus="ERROR | diagnostics" end
+            end)
         end
     end
-end
+    return {setEnabled=setEnabled}
+end)()
+
 -- Camera comfort: native camera remains responsible for position, input and occlusion.
 -- Only angular presentation and inward-clamped zoom recovery are filtered.
 local cameraController=(function()
@@ -1718,16 +1822,407 @@ local cameraController=(function()
     end
     return {setEnabled=setEnabled,refreshPose=refreshPose,shutdown=shutdown,nativeFreeLookInfo=nativeFreeLookInfo,status=status}
 end)()
-local function setSpeed(value)
-    state.speed=value
-    if not value then
-        for hum,original in pairs(originalWalkSpeed) do
-            if hum.Parent then
-                pcall(function() hum.WalkSpeed=original end)
+local Features = (function()
+    local Players = game:GetService("Players")
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local RunService = game:GetService("RunService")
+    local VirtualUser = game:GetService("VirtualUser")
+
+    local player = Players.LocalPlayer
+
+    local M = {}
+
+    local options = {
+        AutoParry = false,
+        AntiBlind = false,
+        AntiAFK = false,
+        NoFall = false,
+        NoSlow = false,
+        Speed = false,
+        SpeedValue = 24
+    }
+
+    local connections = {}
+    local active = true
+
+    local speedBackup
+    local slowBackup
+    local slowWritten
+    local trackedHumanoid
+
+    local lastParry = -math.huge
+    local blindConnections = {}
+
+    local fallHookInstalled = false
+    local fallRemote
+
+    local function findRemote(...)
+        local object = ReplicatedStorage:FindFirstChild("Remotes")
+
+        for _, name in ipairs({...}) do
+            if not object then return nil end
+            object = object:FindFirstChild(name)
+        end
+
+        return object
+    end
+
+    local function connect(signal, callback)
+        local connection = signal:Connect(callback)
+        table.insert(connections, connection)
+        return connection
+    end
+
+    -- AUTO PARRY
+
+    local function autoParry()
+        if not options.AutoParry then return end
+
+        if not player.Team or player.Team.Name ~= "Survivors" then
+            return
+        end
+
+        if player:GetAttribute("EquippedItem") ~= "Parrying Dagger" then
+            return
+        end
+
+        local character = player.Character
+        if not character then return end
+
+        if character:GetAttribute("Knocked")
+            or character:GetAttribute("IsHooked")
+            or character:GetAttribute("IsCarried") then
+            return
+        end
+
+        local root = character:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+
+        local killerRoot
+
+        for _, target in ipairs(Players:GetPlayers()) do
+            if target.Team and target.Team.Name == "Killer" then
+                killerRoot = target.Character
+                    and target.Character:FindFirstChild("HumanoidRootPart")
+                break
             end
-            originalWalkSpeed[hum]=nil
+        end
+
+        if not killerRoot then return end
+
+        local offset = root.Position - killerRoot.Position
+        local distance = offset.Magnitude
+
+        if distance > 14 then return end
+
+        local closing = distance > 0
+            and killerRoot.AssemblyLinearVelocity:Dot(offset.Unit)
+            or 0
+
+        if distance > 6 and closing < 12 then return end
+        if os.clock() - lastParry < 1 then return end
+
+        local remote = findRemote("Items", "Parrying Dagger", "parry")
+
+        if remote and remote:IsA("RemoteEvent") then
+            lastParry = os.clock()
+            remote:FireServer()
         end
     end
+
+    -- ANTI BLIND
+
+    local function scanBlind()
+        if not options.AntiBlind then return end
+        if type(getconnections) ~= "function" then return end
+
+        local remote = findRemote("Items", "Flashlight", "GotBlinded")
+        if not remote then return end
+
+        local signal
+
+        if remote:IsA("BindableEvent") then
+            signal = remote.Event
+        elseif remote:IsA("RemoteEvent") then
+            signal = remote.OnClientEvent
+        end
+
+        if not signal then return end
+
+        for _, connection in ipairs(getconnections(signal)) do
+            pcall(function()
+                if connection.Enabled then
+                    connection:Disable()
+                    blindConnections[connection] = true
+                end
+            end)
+        end
+    end
+
+    local function restoreBlind()
+        for connection in pairs(blindConnections) do
+            pcall(function()
+                connection:Enable()
+            end)
+        end
+
+        table.clear(blindConnections)
+    end
+
+    -- ANTI AFK
+
+    connect(player.Idled, function()
+        if not active or not options.AntiAFK then return end
+
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.zero)
+        end)
+    end)
+
+    -- NO FALL
+
+    local function installNoFall()
+        if fallHookInstalled then return true end
+
+        if type(hookmetamethod) ~= "function"
+            or type(getnamecallmethod) ~= "function" then
+            return false, "Executor tidak mendukung metamethod hook"
+        end
+
+        fallRemote = findRemote("Mechanics", "Fall")
+
+        if not fallRemote then
+            return false, "Fall remote tidak ditemukan"
+        end
+
+        local original
+
+        local callback = function(self, ...)
+            if active
+                and options.NoFall
+                and self == fallRemote
+                and getnamecallmethod() == "FireServer" then
+                return nil
+            end
+
+            return original(self, ...)
+        end
+
+        if type(newcclosure) == "function" then
+            callback = newcclosure(callback)
+        end
+
+        original = hookmetamethod(game, "__namecall", callback)
+
+        fallHookInstalled = true
+        return true
+    end
+
+    -- MOVEMENT
+
+    local function getBaseSpeed(character)
+        if player.Team and player.Team.Name == "Killer" then
+            return tonumber(character:GetAttribute("Speed")) or 18.7
+        end
+
+        return 21
+    end
+
+    local function restoreMovement()
+        if trackedHumanoid and trackedHumanoid.Parent then
+            if speedBackup then
+                trackedHumanoid.WalkSpeed = speedBackup
+            elseif slowBackup and trackedHumanoid.WalkSpeed == slowWritten then
+                trackedHumanoid.WalkSpeed = slowBackup
+            end
+        end
+
+        speedBackup = nil
+        slowBackup = nil
+        slowWritten = nil
+    end
+
+    local function updateMovement()
+        local character = player.Character
+        local humanoid = character
+            and character:FindFirstChildOfClass("Humanoid")
+
+        if humanoid ~= trackedHumanoid then
+            restoreMovement()
+            trackedHumanoid = humanoid
+        end
+
+        if not humanoid or humanoid.Health <= 0 then return end
+
+        -- SPEED
+
+        if options.Speed then
+            if not speedBackup then
+                speedBackup = slowBackup or humanoid.WalkSpeed
+                slowBackup = nil
+                slowWritten = nil
+            end
+
+            humanoid.WalkSpeed = options.SpeedValue
+            return
+        end
+
+        if speedBackup then
+            humanoid.WalkSpeed = speedBackup
+            speedBackup = nil
+        end
+
+        -- NO SLOW
+
+        if options.NoSlow then
+            local base = getBaseSpeed(character)
+
+            if humanoid.WalkSpeed > 0 and humanoid.WalkSpeed < base then
+                slowBackup = humanoid.WalkSpeed
+                slowWritten = base
+                humanoid.WalkSpeed = base
+            end
+        elseif slowBackup then
+            if not character:GetAttribute("Sprinting")
+                and humanoid.WalkSpeed == slowWritten then
+                humanoid.WalkSpeed = slowBackup
+            end
+
+            slowBackup = nil
+            slowWritten = nil
+        end
+    end
+
+    -- SCHEDULER
+
+    connect(RunService.Stepped, function()
+        if active then
+            updateMovement()
+        end
+    end)
+
+    local parryTimer = 0
+    local blindTimer = 0
+
+    connect(RunService.Heartbeat, function(dt)
+        if not active then return end
+
+        parryTimer += dt
+        blindTimer += dt
+
+        if parryTimer >= 0.05 then
+            parryTimer = 0
+            pcall(autoParry)
+        end
+
+        if blindTimer >= 1 then
+            blindTimer = 0
+            pcall(scanBlind)
+        end
+    end)
+
+    -- PUBLIC API
+
+    function M:Set(name, enabled)
+        if not active then
+            return false, "Module destroyed"
+        end
+
+        if type(options[name]) ~= "boolean" then
+            return false, "Unknown feature"
+        end
+
+        enabled = enabled == true
+
+        if name == "NoFall" and enabled then
+            local success, result, reason = pcall(installNoFall)
+
+            if not success then
+                return false, tostring(result)
+            end
+
+            if not result then
+                return false, reason
+            end
+        end
+
+        if name == "AntiBlind" and enabled then
+            if type(getconnections) ~= "function" then
+                return false, "Executor tidak mendukung getconnections"
+            end
+        end
+
+        options[name] = enabled
+
+        if name == "AntiBlind" then
+            if enabled then
+                pcall(scanBlind)
+            else
+                restoreBlind()
+            end
+        end
+
+        return true
+    end
+
+    function M:Get(name)
+        return options[name]
+    end
+
+    function M:SetSpeed(value)
+        options.SpeedValue = math.clamp(tonumber(value) or 24, 16, 60)
+    end
+
+    function M:Destroy()
+        if not active then return end
+        active = false
+
+        for name, value in pairs(options) do
+            if type(value) == "boolean" then
+                options[name] = false
+            end
+        end
+
+        restoreMovement()
+        restoreBlind()
+
+        for _, connection in ipairs(connections) do
+            connection:Disconnect()
+        end
+
+        table.clear(connections)
+    end
+
+    return M
+end)()
+
+-- Hub adapter; original Features module above is unchanged.
+local function setFeature(name: string,key: string,value: boolean)
+    local enabled=value and state.alive
+    local ok,result,reason
+    if enabled and game.GameId~=6739698191 then
+        ok=true;result=false;reason="Unsupported GameId"
+    else
+        ok,result,reason=pcall(function() return Features:Set(name,enabled) end)
+    end
+    if not ok or not result then
+        state[key]=false
+        if enabled then
+            local message=tostring(ok and reason or result)
+            runtimeLog.record(name,message)
+            Native:Notify({Title=name,Content=message,Duration=4})
+            local toggle=toggles[name]
+            if toggle and toggle.Value then toggle:SetValue(false) end
+            if name=="AutoParry" then state.parryQAStatus="ERROR | "..message end
+        end
+        return
+    end
+    state[key]=enabled
+    if name=="AutoParry" then state.parryQAStatus=enabled and "READY | Parrying Dagger" or "OFF" end
+end
+local function setSpeed(value)
+    setFeature("Speed","speed",value)
 end
 
 -- ============================================================
@@ -1738,124 +2233,119 @@ end
 
 
 -- User-supplied AlignOrientation moonwalk, integrated with hub lifecycle.
--- Developer-authorized movement testing only.
+-- Original input, orientation, fallback and wave logic. Only lifecycle/settings wrappers.
 local setMoonwalk=(function()
-    local TURN_RESPONSIVENESS=28
-    local MAX_TORQUE=50000
-    local WIGGLE_SPEED=48
-    local WIGGLE_ANGLE=18
-    local renderName="VD_CleanMoonwalkWiggle_"..player.UserId
-    local bound=false
-    local controlledHumanoid: Humanoid?=nil
-    local controlledRoot: BasePart?=nil
-    local attachment: Attachment?=nil
-    local align: AlignOrientation?=nil
-    local originalAutoRotate: boolean?=nil
-    local wiggleTimer=0
-    local function authorized(): boolean
-        return RunService:IsStudio() or Workspace:GetAttribute("VelionAllowMoonwalk")==true
-    end
-    local function release()
-        wiggleTimer=0
-        if align and align.Parent then align.MaxTorque=0;align.Enabled=false end
-        local hum=controlledHumanoid
-        local original=originalAutoRotate
-        originalAutoRotate=nil
-        if hum and hum.Parent and original~=nil then
-            local ok,err=pcall(function() hum.AutoRotate=original end)
-            if not ok then runtimeLog.record("moonwalk restore",err) end
-        end
-    end
+    local renderName = "VD_CleanMoonwalkWiggle"
+    local bound = false
+    local character: Model? = nil
+    local humanoidRef: Humanoid? = nil
+    local rootRef: BasePart? = nil
+    local attachment: Attachment? = nil
+    local alignOrientation: AlignOrientation? = nil
+    local wiggleTimer = 0
     local function destroyRig()
-        release()
-        if align then align:Destroy();align=nil end
+        if humanoidRef and humanoidRef.Parent then humanoidRef.AutoRotate = true end
+        if alignOrientation then alignOrientation:Destroy();alignOrientation=nil end
         if attachment then attachment:Destroy();attachment=nil end
-        controlledHumanoid=nil
-        controlledRoot=nil
+        character=nil;humanoidRef=nil;rootRef=nil;wiggleTimer=0
     end
-    local function setup(hum: Humanoid,root: BasePart)
-        if controlledHumanoid==hum and controlledRoot==root and align and align.Parent==root
-            and attachment and attachment.Parent==root then return end
+    local function setupMoonwalk(char: Model, humanoid: Humanoid, root: BasePart)
         destroyRig()
-        controlledHumanoid=hum
-        controlledRoot=root
-        local att=Instance.new("Attachment")
-        att.Name="MoonwalkAttachment"
-        att.Parent=root
+        character=char
+        humanoidRef=humanoid
+        rootRef=root
+        local att = Instance.new("Attachment")
+        att.Name = "MoonwalkAttachment"
+        att.Parent = root
         attachment=att
-        local orientation=Instance.new("AlignOrientation")
-        orientation.Name="VelionMoonwalkOrientation"
-        orientation.Mode=Enum.OrientationAlignmentMode.OneAttachment
-        orientation.Attachment0=att
-        orientation.RigidityEnabled=false
-        orientation.Responsiveness=TURN_RESPONSIVENESS
-        orientation.MaxTorque=0
-        orientation.Enabled=false
-        orientation.Parent=root
-        align=orientation
+        local orientation = Instance.new("AlignOrientation")
+        orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+        orientation.Attachment0 = att
+        orientation.RigidityEnabled = false
+        orientation.Responsiveness = state.moonwalkResponsiveness
+        orientation.MaxTorque = 0
+        orientation.Parent = root
+        alignOrientation=orientation
+        wiggleTimer=0
     end
     local function update(dt: number)
-        if not state.alive or not state.moonwalk then destroyRig();return end
-        if not authorized() then destroyRig();state.moonwalkStatus="LOCKED | developer movement test only";return end
+        if not state.alive or not state.moonwalk then return end
         local char=player.Character
-        local hum=char and char:FindFirstChildOfClass("Humanoid")
-        local root=hum and hum.RootPart
-        if not hum or hum.Health<=0 or not root or not root:IsDescendantOf(Workspace) then
-            destroyRig();state.moonwalkStatus="WAITING | character";return
+        local humanoid=char and char:FindFirstChildOfClass("Humanoid")
+        local root=char and char:FindFirstChild("HumanoidRootPart")
+        if not char or not char.Parent or not humanoid or humanoid.Health<=0 or not root or not root:IsA("BasePart") then
+            if character then destroyRig() end
+            state.moonwalkStatus="WAITING | character"
+            return
         end
-        if controlledRoot and (controlledRoot~=root or controlledHumanoid~=hum) then destroyRig() end
-        if UserInputService:GetFocusedTextBox() or hum.Sit or hum.PlatformStand or root.Anchored then
-            release();state.moonwalkStatus="READY | input or character unavailable";return
+        if character~=char or humanoidRef~=humanoid or rootRef~=root or not alignOrientation or not alignOrientation.Parent or not attachment or not attachment.Parent then
+            setupMoonwalk(char,humanoid,root)
         end
-        local w=UserInputService:IsKeyDown(Enum.KeyCode.W)
-        local s=UserInputService:IsKeyDown(Enum.KeyCode.S)
-        local a=UserInputService:IsKeyDown(Enum.KeyCode.A)
-        local d=UserInputService:IsKeyDown(Enum.KeyCode.D)
-        local onlyS=s and not w
-        local bothAD=a and d
-        if not onlyS and not bothAD then
-            release();state.moonwalkStatus="READY | hold S or A+D";return
-        end
-        local camera=Workspace.CurrentCamera
-        if not camera then release();state.moonwalkStatus="WAITING | camera";return end
-        local look=camera.CFrame.LookVector
-        local flat=Vector3.new(look.X,0,look.Z)
-        if flat.Magnitude<.001 then release();state.moonwalkStatus="WAITING | horizontal camera direction";return end
-        local flatCamLook=flat.Unit
-        setup(hum,root)
-        local orientation=align
-        if not orientation then return end
-        if originalAutoRotate==nil then originalAutoRotate=hum.AutoRotate end
-        hum.AutoRotate=false
-        orientation.MaxTorque=MAX_TORQUE
-        orientation.Enabled=true
-        if bothAD and not s and not w then
-            hum:Move(-flatCamLook,false)
-        end
-        local moveDir=hum.MoveDirection
-        local horizontal=Vector3.new(moveDir.X,0,moveDir.Z)
-        local baseReverseDir=horizontal.Magnitude>.05 and -horizontal.Unit or flatCamLook
-        local targetCFrame=CFrame.lookAt(Vector3.zero,baseReverseDir)
-        if bothAD then
-            wiggleTimer=(wiggleTimer+math.clamp(dt,0,.1)*WIGGLE_SPEED)% (20*math.pi)
-            local wave=math.sin(wiggleTimer)+(math.sin(wiggleTimer*2.1)*.2)
-            local yawOffset=math.rad(wave*WIGGLE_ANGLE)
-            targetCFrame=targetCFrame*CFrame.Angles(0,yawOffset,0)
+        local alignOrientation=alignOrientation
+        if not alignOrientation or not workspace.CurrentCamera then return end
+        local TURN_RESPONSIVENESS = state.moonwalkResponsiveness
+        local MAX_TORQUE = state.moonwalkMaxTorque
+        local WIGGLE_SPEED = state.moonwalkWiggleSpeed
+        local WIGGLE_ANGLE = state.moonwalkWiggleAngle
+        alignOrientation.Responsiveness = TURN_RESPONSIVENESS
+
+        local w = UserInputService:IsKeyDown(Enum.KeyCode.W)
+        local s = UserInputService:IsKeyDown(Enum.KeyCode.S)
+        local a = UserInputService:IsKeyDown(Enum.KeyCode.A)
+        local d = UserInputService:IsKeyDown(Enum.KeyCode.D)
+
+        local onlyS = s and not w
+        local bothAD = a and d
+        local camLook = workspace.CurrentCamera.CFrame.LookVector
+        local flatCamLook = Vector3.new(camLook.X, 0, camLook.Z).Unit
+
+        if onlyS or bothAD then
+            humanoid.AutoRotate = false
+            alignOrientation.MaxTorque = MAX_TORQUE
+
+            -- Jika menahan A+D tanpa S, otomatis bantu dorong mundur agar kaki tetap melangkah moonwalk
+            if bothAD and not s and not w then
+                humanoid:Move(-flatCamLook, false)
+            end
+
+            -- Arah dasar membelakangi kamera/gerakan
+            local moveDir = humanoid.MoveDirection
+            local baseReverseDir
+            if moveDir.Magnitude > 0.05 then
+                baseReverseDir = Vector3.new(-moveDir.X, 0, -moveDir.Z).Unit
+            else
+                baseReverseDir = -flatCamLook
+            end
+
+            local targetCFrame = CFrame.lookAt(Vector3.zero, baseReverseDir)
+
+            -- Efek getaran bahu (hanya sumbu Y agar kaki tetap rata di tanah)
+            if bothAD then
+                wiggleTimer = wiggleTimer + (dt * WIGGLE_SPEED)
+                local wave = math.sin(wiggleTimer) + (math.sin(wiggleTimer * 2.1) * 0.2)
+                local yawOffset = math.rad(wave * WIGGLE_ANGLE)
+
+                targetCFrame = targetCFrame * CFrame.Angles(0, yawOffset, 0)
+            else
+                wiggleTimer = 0
+            end
+
+            alignOrientation.CFrame = targetCFrame
         else
-            wiggleTimer=0
+            wiggleTimer = 0
+            alignOrientation.MaxTorque = 0
+            humanoid.AutoRotate = true
         end
-        orientation.CFrame=targetCFrame
-        state.moonwalkStatus=bothAD and "ACTIVE | A+D wiggle" or "ACTIVE | S reverse"
+        state.moonwalkStatus=bothAD and "ACTIVE | A+D wiggle" or onlyS and "ACTIVE | S reverse" or "READY | hold S or A+D"
     end
     return function(enabled: boolean)
         state.moonwalk=enabled and state.alive
         if state.moonwalk then
-            state.moonwalkStatus=authorized() and "READY | hold S or A+D" or "LOCKED | developer movement test only"
+            state.moonwalkStatus="READY | hold S or A+D"
             if not bound then
-                RunService:BindToRenderStep(renderName,Enum.RenderPriority.Character.Value+10,function(dt)
+                RunService:BindToRenderStep(renderName, Enum.RenderPriority.Character.Value + 10, function(dt)
                     local ok,err=pcall(update,dt)
                     if not ok then
-                        destroyRig()
                         state.moonwalkStatus="ERROR | see runtime diagnostics"
                         runtimeLog.record("moonwalk",err)
                     end
@@ -1865,7 +2355,7 @@ local setMoonwalk=(function()
         else
             if bound then RunService:UnbindFromRenderStep(renderName);bound=false end
             destroyRig()
-            state.moonwalkStatus="OFF | native rotation restored"
+            state.moonwalkStatus="OFF | native rotation"
         end
     end
 end)()
@@ -1915,7 +2405,7 @@ local function syncObjectESP()
         or state.hookESP or state.gateESP or state.worldItemsESP
     local previous=state.objectiveESP
     state.objectiveESP=active
-    state.objectLabels=active and state.objectNames
+    state.objectLabels=active
     state.objectHighlight=active
     state.generatorProgressESP=state.generatorESP
     if active and not previous then
@@ -1929,28 +2419,37 @@ local function syncObjectESP()
     lastObjectiveRefresh=0
     refreshObjectiveVisibility()
 end
-registerToggle(Tabs.Objects,"ObjectNames","Object Name ESP",
-    "Show or hide all object labels without disabling outlines","objectNames",
-    function(value)
-        state.objectLabels=state.objectiveESP and value
-        lastObjectiveRefresh=0
-        refreshObjectiveVisibility()
-    end)
+local function refreshObjectNames()
+    lastObjectiveRefresh=-math.huge
+    refreshObjectiveVisibility()
+end
 registerToggle(Tabs.Objects,"GeneratorESP","Generator ESP",
-    "Highlight + name + repair progress when available","generatorESP",syncObjectESP)
+    "Show object highlight; name controlled separately","generatorESP",syncObjectESP)
+registerToggle(Tabs.Objects,"GeneratorNameESP","Generator Name ESP",
+    "Show name and repair progress when available","generatorNameESP",refreshObjectNames)
 registerToggle(Tabs.Objects,"PalletESP","Pallet ESP",
-    "Highlight + name","palletESP",syncObjectESP)
+    "Show object highlight; name controlled separately","palletESP",syncObjectESP)
+registerToggle(Tabs.Objects,"PalletNameESP","Pallet Name ESP",
+    "Show pallet text without changing its highlight","palletNameESP",refreshObjectNames)
 registerToggle(Tabs.Objects,"WindowESP","Window ESP",
-    "Highlight + name","windowESP",syncObjectESP)
+    "Show object highlight; name controlled separately","windowESP",syncObjectESP)
+registerToggle(Tabs.Objects,"WindowNameESP","Window Name ESP",
+    "Show window text without changing its highlight","windowNameESP",refreshObjectNames)
 registerToggle(Tabs.Objects,"HookESP","Hook ESP",
-    "Highlight + name","hookESP",syncObjectESP)
+    "Show object highlight; name controlled separately","hookESP",syncObjectESP)
+registerToggle(Tabs.Objects,"HookNameESP","Hook Name ESP",
+    "Show hook text without changing its highlight","hookNameESP",refreshObjectNames)
 registerToggle(Tabs.Objects,"GateESP","Gate ESP",
-    "Highlight + name","gateESP",syncObjectESP)
+    "Show object highlight; name controlled separately","gateESP",syncObjectESP)
+registerToggle(Tabs.Objects,"GateNameESP","Gate Name ESP",
+    "Show gate text without changing its highlight","gateNameESP",refreshObjectNames)
 registerToggle(Tabs.Objects,"WorldItems","Item ESP",
-    "Highlight + name","worldItemsESP",syncObjectESP)
+    "Show object highlight; name controlled separately","worldItemsESP",syncObjectESP)
+registerToggle(Tabs.Objects,"ItemNameESP","Item Name ESP",
+    "Show item text without changing its highlight","itemNameESP",refreshObjectNames)
 local espSettings=Tabs.Settings:AddSection("ESP Settings")
-for _,category in ipairs({"Killer","Survivor","Unknown","Generator","Pallet","Window","Hook","Gate","Item"}) do
-    local colorName=category=="Unknown" and "Neutral / NPC" or category
+for _,category in ipairs({"Killer","Survivor","Unassigned","Unknown","Generator","Pallet","Window","Hook","Gate","Item"}) do
+    local colorName=category=="Unknown" and "Neutral / NPC" or category=="Unassigned" and "Unassigned Player" or category
     registerColor(espSettings,category.."Color",colorName.." Color",category)
 end
 local itemInfo=espSettings:AddParagraph({
@@ -2033,18 +2532,11 @@ Tabs.Killer:AddParagraph({
     Content="No server ability packets are captured. Unknown states produce no speculative alerts."
 })
 
--- User's Auto Generator and Auto Parry algorithms. Hub adapters only expose
--- original settings and manage enable/disable, connections and cleanup.
+-- Original Auto Generator controller; Auto Parry is managed by Features.
 local userActions=(function()
-    local Teams=game:GetService("Teams")
-    local LocalPlayer=player
     local PlayerGui=playerGui
     local generatorConn: RBXScriptConnection?=nil
-    local parryConn: RBXScriptConnection?=nil
     local alreadyHit=false
-    local lastPressTime=0
-    local cachedParryButton=nil
-    local lastScan=0
     local function pressSkillCheck()
         local ok,err=pcall(function()
             local VirtualInputManager=game:GetService("VirtualInputManager")
@@ -2093,124 +2585,6 @@ local userActions=(function()
             end
         end
     end
-    local function findParryButton()
-        if os.clock() - lastScan < 3 and cachedParryButton and cachedParryButton.Parent then
-            return cachedParryButton
-        end
-        lastScan=os.clock()
-        for _,desc in ipairs(PlayerGui:GetDescendants()) do
-            if desc:IsA("GuiButton") and desc.Visible then
-                local lowerName=desc.Name:lower()
-                if lowerName:find("parry") or lowerName:find("block") or lowerName:find("dagger") or lowerName:find("counter") then
-                    cachedParryButton=desc
-                    return desc
-                end
-            end
-        end
-        return nil
-    end
-    local function isItemOnCooldown()
-        if os.clock() - lastPressTime < state.parryDebounce then return true end
-        local char=LocalPlayer.Character
-        local tool=char and char:FindFirstChildWhichIsA("Tool")
-        for _,target in ipairs({LocalPlayer,char,tool}) do
-            if target then
-                if target:GetAttribute("ParryCooldown") == true
-                    or target:GetAttribute("OnCooldown") == true
-                    or target:GetAttribute("Cooldown") == true
-                    or (tonumber(target:GetAttribute("Cooldown")) or 0) > 0
-                    or (tonumber(target:GetAttribute("ParryCooldown")) or 0) > 0 then
-                    return true
-                end
-            end
-        end
-        local btn=findParryButton()
-        if btn then
-            if btn.BackgroundTransparency > 0.6 or not btn.Active then return true end
-            for _,child in ipairs(btn:GetDescendants()) do
-                if child:IsA("Frame") and child.Visible then
-                    local cName=child.Name:lower()
-                    if cName:find("cool") or cName:find("cd") or cName:find("overlay") or cName:find("fill") then
-                        if child.Size.Y.Scale > 0.02 or child.Size.X.Scale > 0.02 then return true end
-                    end
-                end
-                if child:IsA("TextLabel") and child.Visible and child.Text ~= "" then
-                    local num=tonumber(child.Text:match("(%d+%.?%d*)"))
-                    if num and num > 0 then return true end
-                end
-            end
-        end
-        return false
-    end
-    local function getKillerCharacter()
-        local killerTeam=Teams:FindFirstChild("Killer")
-        if not killerTeam then return nil end
-        -- API correction only: Team:GetPlayers returns an array, not a Player.
-        local killerPlayer=killerTeam:GetPlayers()[1]
-        return killerPlayer and killerPlayer.Character
-    end
-    local function executeParry()
-        if isItemOnCooldown() then return end
-        lastPressTime=os.clock()
-        local ok,err=pcall(function()
-            local char=LocalPlayer.Character
-            local tool=char and char:FindFirstChildWhichIsA("Tool")
-            if tool then tool:Activate() end
-            local btn=findParryButton()
-            if btn then
-                if type(firesignal) == "function" then
-                    firesignal(btn.MouseButton1Click)
-                    firesignal(btn.Activated)
-                else
-                    local VirtualInputManager=game:GetService("VirtualInputManager")
-                    local pos=btn.AbsolutePosition + (btn.AbsoluteSize / 2)
-                    VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 1)
-                    task.wait(0.02)
-                    VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 1)
-                end
-            else
-                local VirtualInputManager=game:GetService("VirtualInputManager")
-                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
-                task.wait(0.02)
-                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
-            end
-        end)
-        if not ok then runtimeLog.record("Auto Parry",err);state.parryQAStatus="ERROR | input unavailable"
-        else state.parryQAStatus="INPUT SENT" end
-    end
-    local function isKillerAttacking(killerChar)
-        local hum=killerChar:FindFirstChildOfClass("Humanoid")
-        local animator=hum and hum:FindFirstChildOfClass("Animator")
-        if animator then
-            for _,track in ipairs(animator:GetPlayingAnimationTracks()) do
-                local animName=(track.Name .. (track.Animation and track.Animation.Name or "")):lower()
-                if animName:find("attack") or animName:find("swing") or animName:find("slash") or animName:find("lunge") or animName:find("hit") then
-                    return true
-                end
-            end
-        end
-        return killerChar:GetAttribute("Attacking") == true or killerChar:GetAttribute("Lunging") == true
-    end
-    local function parryStep()
-        if not state.alive or not state.autoParry then return end
-        if game.GameId~=6739698191 then state.parryQAStatus="Unsupported GameId";return end
-        if isItemOnCooldown() then state.parryQAStatus="COOLDOWN";return end
-        local myChar=LocalPlayer.Character
-        local myRoot=myChar and myChar:FindFirstChild("HumanoidRootPart")
-        if not myRoot then return end
-        local killerChar=getKillerCharacter()
-        local killerRoot=killerChar and killerChar:FindFirstChild("HumanoidRootPart")
-        if not killerRoot then state.parryQAStatus="READY | waiting for Killer";return end
-        local dist=(killerRoot.Position-myRoot.Position).Magnitude
-        if dist > state.parryRange then return end
-        local toMe=(myRoot.Position-killerRoot.Position).Unit
-        local closingSpeed=killerRoot.AssemblyLinearVelocity:Dot(toMe)
-        if dist <= state.parryPanic
-            or (dist <= state.parryRange and isKillerAttacking(killerChar))
-            or (dist <= state.parryClosing and closingSpeed > 18) then
-            executeParry()
-        end
-    end
     local function guarded(name,fn)
         local ok,err=pcall(fn)
         if not ok then runtimeLog.record(name,err) end
@@ -2227,15 +2601,7 @@ local userActions=(function()
         end
     end
     local function setParry(value: boolean)
-        state.autoParry=value and state.alive
-        if state.autoParry then
-            state.parryQAStatus="READY"
-            if not parryConn then parryConn=RunService.Heartbeat:Connect(function() guarded("Auto Parry",parryStep) end) end
-        else
-            if parryConn then parryConn:Disconnect();parryConn=nil end
-            cachedParryButton=nil
-            state.parryQAStatus="OFF"
-        end
+        setFeature("AutoParry","autoParry",value)
     end
     return {setGenerator=setGenerator,setParry=setParry,stop=function() setGenerator(false);setParry(false) end}
 end)()
@@ -2249,15 +2615,7 @@ registerSlider(Tabs.Survivor,"WhiteZoneOffset","White Zone Offset",
     "Calibration in degrees; supplied default 109.",
     state.whiteZoneOffset,90,130,0,function(v) state.whiteZoneOffset=v end)
 registerToggle(Tabs.Survivor,"AutoParry","Auto Parry",
-    "Original attack detection and item cooldown checks","autoParry",userActions.setParry)
-registerSlider(Tabs.Survivor,"ParryRange","Parry Range","Test detection distance (studs).",
-    state.parryRange,6,25,0,function(v) state.parryRange=v end)
-registerSlider(Tabs.Survivor,"ParryClosing","Parry Closing","Test closing distance (studs).",
-    state.parryClosing,3,25,0,function(v) state.parryClosing=v end)
-registerSlider(Tabs.Survivor,"ParryPanic","Parry Panic","Test near distance (studs).",
-    state.parryPanic,1,12,0,function(v) state.parryPanic=v end)
-registerSlider(Tabs.Survivor,"ParryDebounce","Parry Debounce","Minimum delay between QA events (seconds).",
-    state.parryDebounce,.1,2,2,function(v) state.parryDebounce=v end)
+    "User module: equipped Parrying Dagger, fixed range and cooldown","autoParry",userActions.setParry)
 local qaStatus=Tabs.Survivor:AddParagraph({
     Title="ACTION STATUS",Content="OFF"
 })
@@ -2272,26 +2630,47 @@ local skillStatus=Tabs.Survivor:AddParagraph({
 
 local movementDiagnostics=Tabs.Movement:AddParagraph({
     Title="MOVEMENT DIAGNOSTICS",
-    Content="Native movement retained. NoClip and forced WalkSpeed are disabled in this build."
+    Content="Player-only local collision and optional movement assists."
 })
+registerToggle(Tabs.Movement,"NoCollisionPlayer","No Collision Player",
+    "Local character-to-character collision only; server behavior unverified.",
+    "noCollisionPlayer",playerCollision.setEnabled)
+local collisionStatusBox=Tabs.Movement:AddParagraph({Title="PLAYER COLLISION",Content="OFF"})
+registerToggle(Tabs.Movement,"NoFall","No Fall",
+    "User-supplied fall-effect controller","noFall",function(v) setFeature("NoFall","noFall",v) end)
+registerToggle(Tabs.Movement,"NoSlow","No Slow",
+    "User-supplied role speed controller","noSlow",function(v) setFeature("NoSlow","noSlow",v) end)
+registerToggle(Tabs.Movement,"Speed","Speed",
+    "Override WalkSpeed while enabled","speed",setSpeed)
+registerSlider(Tabs.Movement,"SpeedValue","Speed Value",
+    "WalkSpeed; default 24",state.speedValue,16,60,0,function(v) state.speedValue=v;Features:SetSpeed(v) end)
 Tabs.Movement:AddButton({
     Title="Reset Movement",
     Description="Disable local movement assists and restore their original settings.",
     Callback=function()
         setNoClip(false)
-        setSpeed(false)
+        for _,id in ipairs({"Speed","NoSlow","NoFall"}) do
+            if toggles[id] then toggles[id]:SetValue(false) end
+        end
+        if toggles.NoCollisionPlayer then toggles.NoCollisionPlayer:SetValue(false) end
         if toggles.MoonwalkAD then toggles.MoonwalkAD:SetValue(false) end
     end
 })
 registerToggle(Tabs.Movement,
     "MoonwalkAD","Moonwalk DBD",
-    "Hold S for reverse movement, A+D for wiggle; developer test only.",
+    "Original user controller: hold S or A+D.",
     "moonwalk",setMoonwalk)
+registerSlider(Tabs.Movement,"MoonwalkResponsiveness","Turn Responsiveness","Original default: 28.",state.moonwalkResponsiveness,5,100,0,function(v) state.moonwalkResponsiveness=v end)
+registerSlider(Tabs.Movement,"MoonwalkMaxTorque","Max Torque","Original default: 50000.",state.moonwalkMaxTorque,0,100000,0,function(v) state.moonwalkMaxTorque=v end)
+registerSlider(Tabs.Movement,"MoonwalkWiggleSpeed","Wiggle Speed","Original default: 48.",state.moonwalkWiggleSpeed,0,100,0,function(v) state.moonwalkWiggleSpeed=v end)
+registerSlider(Tabs.Movement,"MoonwalkWiggleAngle","Wiggle Angle","Original default: 18 degrees.",state.moonwalkWiggleAngle,0,90,0,function(v) state.moonwalkWiggleAngle=v end)
 local moonwalkStatusBox=Tabs.Movement:AddParagraph({
     Title="MOONWALK STATUS",Content="OFF | native rotation"
 })
 
 
+registerToggle(Tabs.Visual,"AntiBlind","Anti Blind",
+    "User-supplied flashlight effect controller","antiBlind",function(v) setFeature("AntiBlind","antiBlind",v) end)
 registerToggle(Tabs.Visual,"Fullbright","Fullbright",
     "Lighten environment locally","fullbright",
     function() updateLighting() end)
@@ -2389,7 +2768,7 @@ local cursorRelease=create("TextButton",gui,{
 local savedMouseBehavior=nil
 local savedMouseIcon=nil
 local function syncCursor()
-    local open=Window.Root.Parent~=nil and Window.Root.Visible
+    local open=Window.Root.Parent~=nil and Window.Screen.Parent~=nil and Window.Screen.Enabled and Window.Root.Visible
     local release=state.alive and (open or manualCursor)
     cursorModal.Visible=state.alive and open
     cursorRelease.Visible=state.alive and manualCursor and not open
@@ -2409,6 +2788,8 @@ local function syncCursor()
         savedMouseIcon=nil
     end
 end
+registerToggle(Tabs.Settings,"AntiAFK","Anti AFK",
+    "User-supplied idle-event controller","antiAFK",function(v) setFeature("AntiAFK","antiAFK",v) end)
 registerToggle(Tabs.Settings,"ReleaseCursor","Release Cursor Outside Menu",
     "Uses Roblox modal UI; OFF returns control to the native camera.",
     "manualCursor",function(v) manualCursor=v;syncCursor() end)
@@ -2526,12 +2907,56 @@ connect(Window.Root:GetPropertyChangedSignal("Visible"),function()
     ok,err=pcall(syncCursor)
     if not ok then runtimeLog.record("cursor",err) end
 end)
-connect(player.CharacterAdded,function()
-    task.defer(function()
-        if not state.alive then return end
-        local ok,err=pcall(syncCursor)
-        if not ok then runtimeLog.record("cursor",err) end
+-- Revalidate only our UI after lobby/round transitions. Do not modify game UI.
+local menuCursorBinding="VelionMenuCursor_"..player.UserId
+local function recoverMenu()
+    if not state.alive then return end
+    local currentGui=player:FindFirstChildOfClass("PlayerGui")
+    if not currentGui then return end
+    local ok,err=pcall(function()
+        if Window.Screen.Parent~=currentGui then Window.Screen.Parent=currentGui end
+        if gui.Parent~=currentGui then gui.Parent=currentGui end
+        Window.Screen.Enabled=true
+        gui.Enabled=true
+        Window.Screen.ResetOnSpawn=false
+        gui.ResetOnSpawn=false
+        Window.Screen.DisplayOrder=10000
+        gui.DisplayOrder=9999
+        if Window.Root.Parent~=Window.Screen then Window.Root.Parent=Window.Screen end
+        syncCursor()
     end)
+    if not ok then runtimeLog.record("lobby UI recovery",err) end
+end
+local function queueMenuRecovery()
+    task.defer(recoverMenu)
+    task.delay(.35,recoverMenu)
+    task.delay(1,recoverMenu)
+end
+connect(player.CharacterAdded,queueMenuRecovery)
+connect(player.CharacterRemoving,queueMenuRecovery)
+connect(player:GetPropertyChangedSignal("Team"),queueMenuRecovery)
+connect(player.ChildAdded,function(child)
+    if child:IsA("PlayerGui") then queueMenuRecovery() end
+end)
+local lastMenuRecovery=0
+connect(RunService.Heartbeat,function()
+    if not state.alive then return end
+    local now=os.clock()
+    if now-lastMenuRecovery<.5 then return end
+    lastMenuRecovery=now
+    if not Window.Screen.Parent or not Window.Screen.Enabled or not gui.Parent or not gui.Enabled then recoverMenu() end
+end)
+RunService:BindToRenderStep(menuCursorBinding,Enum.RenderPriority.Last.Value+5,function()
+    if not state.alive then return end
+    if Window.Root.Visible and Window.Screen.Parent and Window.Screen.Enabled or manualCursor then
+        if UserInputService.MouseEnabled then
+            if UserInputService.MouseBehavior~=Enum.MouseBehavior.Default then
+                savedMouseBehavior=UserInputService.MouseBehavior
+            end
+            if not UserInputService.MouseIconEnabled then savedMouseIcon=false end
+            syncCursor()
+        end
+    end
 end)
 local function stopCursor()
     manualCursor=false
@@ -2547,7 +2972,7 @@ local function restoreNativeControls(closeMenu)
         local ok,err=pcall(fn)
         if not ok then failures[#failures+1]=name..": "..tostring(err):sub(1,100) end
     end
-    for _,id in ipairs({"CustomFov","SmoothCamera","SmoothZoom","MoonwalkAD","ReleaseCursor"}) do
+    for _,id in ipairs({"CustomFov","SmoothCamera","SmoothZoom","MoonwalkAD","NoCollisionPlayer","Speed","NoSlow","NoFall","ReleaseCursor"}) do
         local toggle=toggles[id]
         if toggle then
             state[toggleStateKeys[id]]=false
@@ -2557,6 +2982,7 @@ local function restoreNativeControls(closeMenu)
     attempt("camera",cameraController.shutdown)
     attempt("moonwalk",function() setMoonwalk(false) end)
     attempt("collision",function() setNoClip(false) end)
+    attempt("player collision",function() playerCollision.setEnabled(false) end)
     attempt("speed",function() setSpeed(false) end)
     manualCursor=false
     state.manualCursor=false
@@ -2726,6 +3152,9 @@ do
             if type(data)~="table" then return end
             for id,obj in pairs(controls) do
                 local v=data[id]
+                -- Migrate only previous stock role colors, preserving other custom colors.
+                if id=="SurvivorColor" and type(v)=="string" and v:upper()=="#4EADFC" then v="#46EB78" end
+                if id=="KillerColor" and type(v)=="string" and v:upper()=="#FF505B" then v="#FF2D37" end
                 if obj.Type=="Slider" and type(v)=="number" then obj:SetValue(v)
                 elseif (obj.Type=="Dropdown" or obj.Type=="Colorpicker") and type(v)=="string" then obj:SetValue(v) end
             end
@@ -2902,13 +3331,14 @@ connect(RunService.Heartbeat,function()
     qaStatus:SetDesc("Generator: "..state.skillQAStatus.."\nParry: "..state.parryQAStatus)
     npcStatus:SetDesc(state.npcESP and string.format("%s | detected: %d | marked: %d",RunService:IsStudio() and "Studio rig discovery" or "Tagged NPCs",state.npcFound,state.npcVisible) or "OFF")
     moonwalkStatusBox:SetDesc(state.moonwalkStatus)
+    collisionStatusBox:SetDesc(state.playerCollisionStatus)
     local hum=char and char:FindFirstChildOfClass("Humanoid")
     local velocity=root and root:IsA("BasePart") and root.AssemblyLinearVelocity or Vector3.zero
     local horizontal=Vector3.new(velocity.X,0,velocity.Z).Magnitude
     local pingText="unavailable"
     local pingOK,ping=pcall(function() return player:GetNetworkPing() end)
     if pingOK and type(ping)=="number" then pingText=string.format("%.0f ms (one-way estimate)",ping*1000) end
-    movementDiagnostics:SetDesc(string.format("FPS: %d | Network: %s\nNative WalkSpeed: %.1f | Horizontal velocity: %.1f studs/s\nNo movement override is applied by NoClip or Speed Assist.",state.fps,pingText,hum and hum.WalkSpeed or 0,horizontal))
+    movementDiagnostics:SetDesc(string.format("FPS: %d | Network: %s\nNative WalkSpeed: %.1f | Horizontal velocity: %.1f studs/s\nPlayer collision: "..state.playerCollisionStatus.."",state.fps,pingText,hum and hum.WalkSpeed or 0,horizontal))
 end)
 
 -- Existing session event cleanup.
@@ -2956,11 +3386,13 @@ local function cleanup()
         objectiveVisuals[obj]=nil
     end
     attempt("collision",function() setNoClip(false) end)
+    attempt("player collision",function() playerCollision.setEnabled(false) end)
     state.fullbright=false
     state.noFog=false
     if restoreLighting then attempt("lighting",updateLighting) end
-    attempt("speed",function() setSpeed(false) end)
+    attempt("feature module",function() Features:Destroy() end)
     attempt("camera",cameraController.shutdown)
+    attempt("menu cursor binding",function() RunService:UnbindFromRenderStep(menuCursorBinding) end)
     attempt("cursor",stopCursor)
     attempt("overlay",function() gui:Destroy() end)
     attempt("interface",function() Native:Destroy() end)
@@ -2970,4 +3402,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V5.3.7] Original user controllers integrated; Roblox runtime not tested.")
+print("[XandMe V5.4.2] User Features module integrated; Roblox runtime not tested.")
