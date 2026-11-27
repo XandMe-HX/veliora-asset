@@ -1,6 +1,6 @@
 --!strict
 --[[
-    VELION DISTRICT HUB V5.4.1 - COMPACT ESP LABELS
+    VELION DISTRICT HUB V5.4.2 - USER FEATURES
     For Roblox Violence District - client-side utility module.
     Native Roblox UI; no external interface library.
     IMPORTANT: Does not spoof server state or grant server-side immunity.
@@ -47,7 +47,7 @@ local state = {
     playerMask=false, chaseStatus=false, knockedStatus=false, hookedStatus=false,
     playerHighlight=false, objectHighlight=false, highlightMode="Outline", nextKiller=false, skillMonitor=false,
     autoSkillCheck=false, whiteZoneOffset=109, skillQAStatus="OFF",
-    autoParry=false, parryRange=14,parryPanic=6.2,parryDebounce=1.0,parryQAStatus="OFF",
+    autoParry=false, antiBlind=false, antiAFK=false, noFall=false, noSlow=false, parryQAStatus="OFF",
     inputStatus="User-supplied input controller",
     generatorESP=false, palletESP=false, windowESP=false, hookESP=false,
     gateESP=false, generatorProgressESP=false, espDistance=650,
@@ -295,7 +295,7 @@ local Native,Window=(function()
     local header=create("Frame",root,{Size=UDim2.new(1,0,0,62),BackgroundColor3=C.black,BorderSizePixel=0,Active=true})
     local brand=text(header,"XandMe.",26,true)
     brand.Position=UDim2.fromOffset(16,7);brand.Size=UDim2.new(1,-144,0,30);brand.AutomaticSize=Enum.AutomaticSize.None
-    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.4.1",10,false,C.muted)
+    local subtitle=text(header,"VELION DISTRICT  /  NATIVE V5.4.2",10,false,C.muted)
     subtitle.Position=UDim2.fromOffset(17,38);subtitle.Size=UDim2.new(1,-144,0,15);subtitle.AutomaticSize=Enum.AutomaticSize.None
     local minimize=btn(header,"−",34,30)
     minimize.AnchorPoint=Vector2.new(1,.5);minimize.Position=UDim2.new(1,-78,.5,0)
@@ -759,7 +759,6 @@ end
 local playerVisuals={}
 local objectiveVisuals={}
 local originalsCollision=setmetatable({}, {__mode="k"})
-local originalWalkSpeed=setmetatable({}, {__mode="k"})
 local function gameValue(object,name)
     if not object then return nil end
     local value=object:GetAttribute(name)
@@ -1543,19 +1542,6 @@ local function updateNoClip()
         end
     end
 end
-local function updateSpeed()
-    if not state.speed then return end
-    local character=player.Character
-    local hum=character and character:FindFirstChildOfClass("Humanoid")
-    if hum and hum.Health>0 then
-        if originalWalkSpeed[hum]==nil then
-            originalWalkSpeed[hum]=hum.WalkSpeed
-        end
-        if hum.WalkSpeed~=state.speedValue then
-            hum.WalkSpeed=state.speedValue
-        end
-    end
-end
 -- Pairwise local character constraints; never change map or body CanCollide.
 local playerCollision=(function()
     local conn: RBXScriptConnection?=nil
@@ -1836,16 +1822,407 @@ local cameraController=(function()
     end
     return {setEnabled=setEnabled,refreshPose=refreshPose,shutdown=shutdown,nativeFreeLookInfo=nativeFreeLookInfo,status=status}
 end)()
-local function setSpeed(value)
-    state.speed=value
-    if not value then
-        for hum,original in pairs(originalWalkSpeed) do
-            if hum.Parent then
-                pcall(function() hum.WalkSpeed=original end)
+local Features = (function()
+    local Players = game:GetService("Players")
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local RunService = game:GetService("RunService")
+    local VirtualUser = game:GetService("VirtualUser")
+
+    local player = Players.LocalPlayer
+
+    local M = {}
+
+    local options = {
+        AutoParry = false,
+        AntiBlind = false,
+        AntiAFK = false,
+        NoFall = false,
+        NoSlow = false,
+        Speed = false,
+        SpeedValue = 24
+    }
+
+    local connections = {}
+    local active = true
+
+    local speedBackup
+    local slowBackup
+    local slowWritten
+    local trackedHumanoid
+
+    local lastParry = -math.huge
+    local blindConnections = {}
+
+    local fallHookInstalled = false
+    local fallRemote
+
+    local function findRemote(...)
+        local object = ReplicatedStorage:FindFirstChild("Remotes")
+
+        for _, name in ipairs({...}) do
+            if not object then return nil end
+            object = object:FindFirstChild(name)
+        end
+
+        return object
+    end
+
+    local function connect(signal, callback)
+        local connection = signal:Connect(callback)
+        table.insert(connections, connection)
+        return connection
+    end
+
+    -- AUTO PARRY
+
+    local function autoParry()
+        if not options.AutoParry then return end
+
+        if not player.Team or player.Team.Name ~= "Survivors" then
+            return
+        end
+
+        if player:GetAttribute("EquippedItem") ~= "Parrying Dagger" then
+            return
+        end
+
+        local character = player.Character
+        if not character then return end
+
+        if character:GetAttribute("Knocked")
+            or character:GetAttribute("IsHooked")
+            or character:GetAttribute("IsCarried") then
+            return
+        end
+
+        local root = character:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+
+        local killerRoot
+
+        for _, target in ipairs(Players:GetPlayers()) do
+            if target.Team and target.Team.Name == "Killer" then
+                killerRoot = target.Character
+                    and target.Character:FindFirstChild("HumanoidRootPart")
+                break
             end
-            originalWalkSpeed[hum]=nil
+        end
+
+        if not killerRoot then return end
+
+        local offset = root.Position - killerRoot.Position
+        local distance = offset.Magnitude
+
+        if distance > 14 then return end
+
+        local closing = distance > 0
+            and killerRoot.AssemblyLinearVelocity:Dot(offset.Unit)
+            or 0
+
+        if distance > 6 and closing < 12 then return end
+        if os.clock() - lastParry < 1 then return end
+
+        local remote = findRemote("Items", "Parrying Dagger", "parry")
+
+        if remote and remote:IsA("RemoteEvent") then
+            lastParry = os.clock()
+            remote:FireServer()
         end
     end
+
+    -- ANTI BLIND
+
+    local function scanBlind()
+        if not options.AntiBlind then return end
+        if type(getconnections) ~= "function" then return end
+
+        local remote = findRemote("Items", "Flashlight", "GotBlinded")
+        if not remote then return end
+
+        local signal
+
+        if remote:IsA("BindableEvent") then
+            signal = remote.Event
+        elseif remote:IsA("RemoteEvent") then
+            signal = remote.OnClientEvent
+        end
+
+        if not signal then return end
+
+        for _, connection in ipairs(getconnections(signal)) do
+            pcall(function()
+                if connection.Enabled then
+                    connection:Disable()
+                    blindConnections[connection] = true
+                end
+            end)
+        end
+    end
+
+    local function restoreBlind()
+        for connection in pairs(blindConnections) do
+            pcall(function()
+                connection:Enable()
+            end)
+        end
+
+        table.clear(blindConnections)
+    end
+
+    -- ANTI AFK
+
+    connect(player.Idled, function()
+        if not active or not options.AntiAFK then return end
+
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.zero)
+        end)
+    end)
+
+    -- NO FALL
+
+    local function installNoFall()
+        if fallHookInstalled then return true end
+
+        if type(hookmetamethod) ~= "function"
+            or type(getnamecallmethod) ~= "function" then
+            return false, "Executor tidak mendukung metamethod hook"
+        end
+
+        fallRemote = findRemote("Mechanics", "Fall")
+
+        if not fallRemote then
+            return false, "Fall remote tidak ditemukan"
+        end
+
+        local original
+
+        local callback = function(self, ...)
+            if active
+                and options.NoFall
+                and self == fallRemote
+                and getnamecallmethod() == "FireServer" then
+                return nil
+            end
+
+            return original(self, ...)
+        end
+
+        if type(newcclosure) == "function" then
+            callback = newcclosure(callback)
+        end
+
+        original = hookmetamethod(game, "__namecall", callback)
+
+        fallHookInstalled = true
+        return true
+    end
+
+    -- MOVEMENT
+
+    local function getBaseSpeed(character)
+        if player.Team and player.Team.Name == "Killer" then
+            return tonumber(character:GetAttribute("Speed")) or 18.7
+        end
+
+        return 21
+    end
+
+    local function restoreMovement()
+        if trackedHumanoid and trackedHumanoid.Parent then
+            if speedBackup then
+                trackedHumanoid.WalkSpeed = speedBackup
+            elseif slowBackup and trackedHumanoid.WalkSpeed == slowWritten then
+                trackedHumanoid.WalkSpeed = slowBackup
+            end
+        end
+
+        speedBackup = nil
+        slowBackup = nil
+        slowWritten = nil
+    end
+
+    local function updateMovement()
+        local character = player.Character
+        local humanoid = character
+            and character:FindFirstChildOfClass("Humanoid")
+
+        if humanoid ~= trackedHumanoid then
+            restoreMovement()
+            trackedHumanoid = humanoid
+        end
+
+        if not humanoid or humanoid.Health <= 0 then return end
+
+        -- SPEED
+
+        if options.Speed then
+            if not speedBackup then
+                speedBackup = slowBackup or humanoid.WalkSpeed
+                slowBackup = nil
+                slowWritten = nil
+            end
+
+            humanoid.WalkSpeed = options.SpeedValue
+            return
+        end
+
+        if speedBackup then
+            humanoid.WalkSpeed = speedBackup
+            speedBackup = nil
+        end
+
+        -- NO SLOW
+
+        if options.NoSlow then
+            local base = getBaseSpeed(character)
+
+            if humanoid.WalkSpeed > 0 and humanoid.WalkSpeed < base then
+                slowBackup = humanoid.WalkSpeed
+                slowWritten = base
+                humanoid.WalkSpeed = base
+            end
+        elseif slowBackup then
+            if not character:GetAttribute("Sprinting")
+                and humanoid.WalkSpeed == slowWritten then
+                humanoid.WalkSpeed = slowBackup
+            end
+
+            slowBackup = nil
+            slowWritten = nil
+        end
+    end
+
+    -- SCHEDULER
+
+    connect(RunService.Stepped, function()
+        if active then
+            updateMovement()
+        end
+    end)
+
+    local parryTimer = 0
+    local blindTimer = 0
+
+    connect(RunService.Heartbeat, function(dt)
+        if not active then return end
+
+        parryTimer += dt
+        blindTimer += dt
+
+        if parryTimer >= 0.05 then
+            parryTimer = 0
+            pcall(autoParry)
+        end
+
+        if blindTimer >= 1 then
+            blindTimer = 0
+            pcall(scanBlind)
+        end
+    end)
+
+    -- PUBLIC API
+
+    function M:Set(name, enabled)
+        if not active then
+            return false, "Module destroyed"
+        end
+
+        if type(options[name]) ~= "boolean" then
+            return false, "Unknown feature"
+        end
+
+        enabled = enabled == true
+
+        if name == "NoFall" and enabled then
+            local success, result, reason = pcall(installNoFall)
+
+            if not success then
+                return false, tostring(result)
+            end
+
+            if not result then
+                return false, reason
+            end
+        end
+
+        if name == "AntiBlind" and enabled then
+            if type(getconnections) ~= "function" then
+                return false, "Executor tidak mendukung getconnections"
+            end
+        end
+
+        options[name] = enabled
+
+        if name == "AntiBlind" then
+            if enabled then
+                pcall(scanBlind)
+            else
+                restoreBlind()
+            end
+        end
+
+        return true
+    end
+
+    function M:Get(name)
+        return options[name]
+    end
+
+    function M:SetSpeed(value)
+        options.SpeedValue = math.clamp(tonumber(value) or 24, 16, 60)
+    end
+
+    function M:Destroy()
+        if not active then return end
+        active = false
+
+        for name, value in pairs(options) do
+            if type(value) == "boolean" then
+                options[name] = false
+            end
+        end
+
+        restoreMovement()
+        restoreBlind()
+
+        for _, connection in ipairs(connections) do
+            connection:Disconnect()
+        end
+
+        table.clear(connections)
+    end
+
+    return M
+end)()
+
+-- Hub adapter; original Features module above is unchanged.
+local function setFeature(name: string,key: string,value: boolean)
+    local enabled=value and state.alive
+    local ok,result,reason
+    if enabled and game.GameId~=6739698191 then
+        ok=true;result=false;reason="Unsupported GameId"
+    else
+        ok,result,reason=pcall(function() return Features:Set(name,enabled) end)
+    end
+    if not ok or not result then
+        state[key]=false
+        if enabled then
+            local message=tostring(ok and reason or result)
+            runtimeLog.record(name,message)
+            Native:Notify({Title=name,Content=message,Duration=4})
+            local toggle=toggles[name]
+            if toggle and toggle.Value then toggle:SetValue(false) end
+            if name=="AutoParry" then state.parryQAStatus="ERROR | "..message end
+        end
+        return
+    end
+    state[key]=enabled
+    if name=="AutoParry" then state.parryQAStatus=enabled and "READY | Parrying Dagger" or "OFF" end
+end
+local function setSpeed(value)
+    setFeature("Speed","speed",value)
 end
 
 -- ============================================================
@@ -2155,18 +2532,11 @@ Tabs.Killer:AddParagraph({
     Content="No server ability packets are captured. Unknown states produce no speculative alerts."
 })
 
--- User's Auto Generator and Auto Parry algorithms. Hub adapters only expose
--- original settings and manage enable/disable, connections and cleanup.
+-- Original Auto Generator controller; Auto Parry is managed by Features.
 local userActions=(function()
-    local Teams=game:GetService("Teams")
-    local LocalPlayer=player
     local PlayerGui=playerGui
     local generatorConn: RBXScriptConnection?=nil
     local alreadyHit=false
-    local parryConnections: {RBXScriptConnection}={}
-    local parryGeneration=0
-    local hookedKillers={}
-    local lastParryTick=0
     local function pressSkillCheck()
         local ok,err=pcall(function()
             local VirtualInputManager=game:GetService("VirtualInputManager")
@@ -2215,181 +2585,6 @@ local userActions=(function()
             end
         end
     end
-    local NON_DAGGER_ITEMS = {
-        "pistol", "revolver", "gun", "flashlight", "senter", "bandage", "medkit",
-        "adrenaline", "candle", "holy", "tracker", "gate", "clone"
-    }
-    local function findParryingDagger()
-        local char = LocalPlayer.Character
-        local backpack = LocalPlayer:FindFirstChild("Backpack")
-        local function isDagger(tool)
-            if not tool:IsA("Tool") then return false end
-            local lower = tool.Name:lower()
-            for _, bad in ipairs(NON_DAGGER_ITEMS) do
-                if lower:find(bad, 1, true) then return false end
-            end
-            return true
-        end
-        if char then
-            for _, item in ipairs(char:GetChildren()) do
-                if isDagger(item) then return item, true end
-            end
-        end
-        if backpack then
-            for _, item in ipairs(backpack:GetChildren()) do
-                if isDagger(item) then return item, false end
-            end
-        end
-        return nil, false
-    end
-    local function isDaggerOnCooldown(daggerTool)
-        if os.clock() - lastParryTick < state.parryDebounce then return true end
-        for _, target in ipairs({ daggerTool, LocalPlayer.Character, LocalPlayer }) do
-            if target then
-                for attrName, val in pairs(target:GetAttributes()) do
-                    local lower = attrName:lower()
-                    if lower:find("cool") or lower:find("cd") or lower:find("recharge") then
-                        if val == true or (type(val) == "number" and val > 0) then
-                            return true
-                        end
-                    end
-                end
-            end
-        end
-        return false
-    end
-    local function getKillerCharacter()
-        local killerTeam = Teams:FindFirstChild("Killer")
-        if not killerTeam then return nil end
-        local list = killerTeam:GetPlayers()
-        -- GetPlayers returns an array.
-        local killerPlayer = list and list[1]
-        return killerPlayer and killerPlayer.Character
-    end
-    local function didParryActivate(daggerTool)
-        local char = LocalPlayer.Character
-        if not char then return false end
-        for _, target in ipairs({ char, daggerTool }) do
-            if target then
-                for attrName, val in pairs(target:GetAttributes()) do
-                    local lower = attrName:lower()
-                    if (lower:find("parry") or lower:find("guard") or lower:find("block") or lower:find("active")) and val == true then
-                        return true
-                    end
-                end
-            end
-        end
-        return false
-    end
-    local function executeWithFallback(sourceName)
-        if not state.alive or not state.autoParry then return end
-        local daggerTool, isEquipped = findParryingDagger()
-        if not daggerTool or isDaggerOnCooldown(daggerTool) then return end
-        local myChar = LocalPlayer.Character
-        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-        local killerChar = getKillerCharacter()
-        local killerRoot = killerChar and killerChar:FindFirstChild("HumanoidRootPart")
-        if not myRoot or not killerRoot then return end
-        local dist = (killerRoot.Position - myRoot.Position).Magnitude
-        if dist > state.parryRange then return end
-        lastParryTick = os.clock()
-        local generation=parryGeneration
-        local function enabled()
-            return state.alive and state.autoParry and generation==parryGeneration
-        end
-        state.parryQAStatus="TRIGGER | "..sourceName
-        task.spawn(function()
-            local ok,err=pcall(function()
-                if not enabled() then return end
-                myRoot.CFrame = CFrame.lookAt(myRoot.Position, Vector3.new(killerRoot.Position.X, myRoot.Position.Y, killerRoot.Position.Z))
-                local hum = myChar:FindFirstChildOfClass("Humanoid")
-                if not isEquipped and hum then
-                    hum:EquipTool(daggerTool)
-                    task.wait(0.02)
-                end
-                if not enabled() then return end
-                daggerTool:Activate()
-                for _, desc in ipairs(daggerTool:GetDescendants()) do
-                    if desc:IsA("RemoteEvent") then
-                        desc:FireServer()
-                    end
-                end
-                task.wait(0.03)
-                if not enabled() or didParryActivate(daggerTool) then return end
-                local VirtualInputManager=game:GetService("VirtualInputManager")
-                if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
-                    local cam = workspace.CurrentCamera
-                    local cx = cam and (cam.ViewportSize.X * 0.5) or 500
-                    local cy = cam and (cam.ViewportSize.Y * 0.5) or 300
-                    VirtualInputManager:SendTouchEvent(1, 0, cx, cy)
-                    task.wait(0.015)
-                    VirtualInputManager:SendTouchEvent(1, 2, cx, cy)
-                else
-                    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
-                    task.wait(0.015)
-                    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
-                end
-                task.wait(0.03)
-                if not enabled() or didParryActivate(daggerTool) then return end
-                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
-                task.wait(0.015)
-                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
-            end)
-            if not ok then
-                runtimeLog.record("Auto Parry",err)
-                if enabled() then state.parryQAStatus="ERROR | see runtime diagnostics" end
-            end
-        end)
-    end
-    local function attachKillerListeners(killerChar)
-        if not killerChar then return end
-        table.insert(parryConnections, killerChar.DescendantAdded:Connect(function(desc)
-            if desc:IsA("Sound") then
-                local sName = desc.Name:lower()
-                if sName:find("swing") or sName:find("slash") or sName:find("attack") or sName:find("whoosh") or sName:find("lunge") then
-                    executeWithFallback("Layer2_Sound")
-                end
-            end
-        end))
-    end
-    local function parryStep()
-        if not state.alive or not state.autoParry then return end
-        local killerChar = getKillerCharacter()
-        if not killerChar then return end
-        if not hookedKillers[killerChar] then
-            hookedKillers[killerChar]=true
-            attachKillerListeners(killerChar)
-        end
-        local myChar = LocalPlayer.Character
-        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-        local killerRoot = killerChar:FindFirstChild("HumanoidRootPart")
-        if not myRoot or not killerRoot then return end
-        local dist = (killerRoot.Position - myRoot.Position).Magnitude
-        if dist > state.parryRange then return end
-        local hum = killerChar:FindFirstChildOfClass("Humanoid")
-        local animator = hum and hum:FindFirstChildOfClass("Animator")
-        if animator then
-            for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-                local name = track.Name:lower()
-                if not (name:find("walk") or name:find("run") or name:find("idle") or name:find("jump") or name:find("fall") or name:find("vault")) then
-                    if track.Priority == Enum.AnimationPriority.Action
-                        or track.Priority == Enum.AnimationPriority.Action2
-                        or track.Priority == Enum.AnimationPriority.Action3 then
-                        executeWithFallback("Layer3_Anim")
-                        break
-                    end
-                end
-            end
-        end
-    end
-    local function stopParry()
-        parryGeneration += 1
-        for _,conn in ipairs(parryConnections) do
-            pcall(function() conn:Disconnect() end)
-        end
-        table.clear(parryConnections)
-        table.clear(hookedKillers)
-    end
     local function guarded(name,fn)
         local ok,err=pcall(fn)
         if not ok then runtimeLog.record(name,err) end
@@ -2406,24 +2601,7 @@ local userActions=(function()
         end
     end
     local function setParry(value: boolean)
-        stopParry()
-        state.autoParry=value and state.alive
-        if not state.autoParry then state.parryQAStatus="OFF";return end
-        if game.GameId~=6739698191 then state.parryQAStatus="Unsupported GameId";return end
-        state.parryQAStatus="READY"
-        local ReplicatedStorage=game:GetService("ReplicatedStorage")
-        local Remotes = ReplicatedStorage:FindFirstChild("Remotes")
-        local AttacksFolder = Remotes and Remotes:FindFirstChild("Attacks")
-        if AttacksFolder then
-            for _, remote in ipairs(AttacksFolder:GetDescendants()) do
-                if remote:IsA("RemoteEvent") then
-                    table.insert(parryConnections, remote.OnClientEvent:Connect(function()
-                        guarded("Auto Parry remote",function() executeWithFallback("Layer1_Remote") end)
-                    end))
-                end
-            end
-        end
-        table.insert(parryConnections,RunService.Heartbeat:Connect(function() guarded("Auto Parry",parryStep) end))
+        setFeature("AutoParry","autoParry",value)
     end
     return {setGenerator=setGenerator,setParry=setParry,stop=function() setGenerator(false);setParry(false) end}
 end)()
@@ -2437,13 +2615,7 @@ registerSlider(Tabs.Survivor,"WhiteZoneOffset","White Zone Offset",
     "Calibration in degrees; supplied default 109.",
     state.whiteZoneOffset,90,130,0,function(v) state.whiteZoneOffset=v end)
 registerToggle(Tabs.Survivor,"AutoParry","Auto Parry",
-    "User-supplied 3-layer fail-safe controller","autoParry",userActions.setParry)
-registerSlider(Tabs.Survivor,"ParryRange","Parry Range","Detection distance (studs).",
-    state.parryRange,6,25,0,function(v) state.parryRange=v end)
-registerSlider(Tabs.Survivor,"ParryPanic","Parry Panic","Original parameter; not used by the supplied trigger logic.",
-    state.parryPanic,1,12,1,function(v) state.parryPanic=v end)
-registerSlider(Tabs.Survivor,"ParryDebounce","Parry Debounce","Minimum delay between attempts (seconds).",
-    state.parryDebounce,.1,2,2,function(v) state.parryDebounce=v end)
+    "User module: equipped Parrying Dagger, fixed range and cooldown","autoParry",userActions.setParry)
 local qaStatus=Tabs.Survivor:AddParagraph({
     Title="ACTION STATUS",Content="OFF"
 })
@@ -2458,18 +2630,28 @@ local skillStatus=Tabs.Survivor:AddParagraph({
 
 local movementDiagnostics=Tabs.Movement:AddParagraph({
     Title="MOVEMENT DIAGNOSTICS",
-    Content="Player-only local collision option; map collision and native WalkSpeed retained."
+    Content="Player-only local collision and optional movement assists."
 })
 registerToggle(Tabs.Movement,"NoCollisionPlayer","No Collision Player",
     "Local character-to-character collision only; server behavior unverified.",
     "noCollisionPlayer",playerCollision.setEnabled)
 local collisionStatusBox=Tabs.Movement:AddParagraph({Title="PLAYER COLLISION",Content="OFF"})
+registerToggle(Tabs.Movement,"NoFall","No Fall",
+    "User-supplied fall-effect controller","noFall",function(v) setFeature("NoFall","noFall",v) end)
+registerToggle(Tabs.Movement,"NoSlow","No Slow",
+    "User-supplied role speed controller","noSlow",function(v) setFeature("NoSlow","noSlow",v) end)
+registerToggle(Tabs.Movement,"Speed","Speed",
+    "Override WalkSpeed while enabled","speed",setSpeed)
+registerSlider(Tabs.Movement,"SpeedValue","Speed Value",
+    "WalkSpeed; default 24",state.speedValue,16,60,0,function(v) state.speedValue=v;Features:SetSpeed(v) end)
 Tabs.Movement:AddButton({
     Title="Reset Movement",
     Description="Disable local movement assists and restore their original settings.",
     Callback=function()
         setNoClip(false)
-        setSpeed(false)
+        for _,id in ipairs({"Speed","NoSlow","NoFall"}) do
+            if toggles[id] then toggles[id]:SetValue(false) end
+        end
         if toggles.NoCollisionPlayer then toggles.NoCollisionPlayer:SetValue(false) end
         if toggles.MoonwalkAD then toggles.MoonwalkAD:SetValue(false) end
     end
@@ -2487,6 +2669,8 @@ local moonwalkStatusBox=Tabs.Movement:AddParagraph({
 })
 
 
+registerToggle(Tabs.Visual,"AntiBlind","Anti Blind",
+    "User-supplied flashlight effect controller","antiBlind",function(v) setFeature("AntiBlind","antiBlind",v) end)
 registerToggle(Tabs.Visual,"Fullbright","Fullbright",
     "Lighten environment locally","fullbright",
     function() updateLighting() end)
@@ -2604,6 +2788,8 @@ local function syncCursor()
         savedMouseIcon=nil
     end
 end
+registerToggle(Tabs.Settings,"AntiAFK","Anti AFK",
+    "User-supplied idle-event controller","antiAFK",function(v) setFeature("AntiAFK","antiAFK",v) end)
 registerToggle(Tabs.Settings,"ReleaseCursor","Release Cursor Outside Menu",
     "Uses Roblox modal UI; OFF returns control to the native camera.",
     "manualCursor",function(v) manualCursor=v;syncCursor() end)
@@ -2786,7 +2972,7 @@ local function restoreNativeControls(closeMenu)
         local ok,err=pcall(fn)
         if not ok then failures[#failures+1]=name..": "..tostring(err):sub(1,100) end
     end
-    for _,id in ipairs({"CustomFov","SmoothCamera","SmoothZoom","MoonwalkAD","NoCollisionPlayer","ReleaseCursor"}) do
+    for _,id in ipairs({"CustomFov","SmoothCamera","SmoothZoom","MoonwalkAD","NoCollisionPlayer","Speed","NoSlow","NoFall","ReleaseCursor"}) do
         local toggle=toggles[id]
         if toggle then
             state[toggleStateKeys[id]]=false
@@ -3204,7 +3390,7 @@ local function cleanup()
     state.fullbright=false
     state.noFog=false
     if restoreLighting then attempt("lighting",updateLighting) end
-    attempt("speed",function() setSpeed(false) end)
+    attempt("feature module",function() Features:Destroy() end)
     attempt("camera",cameraController.shutdown)
     attempt("menu cursor binding",function() RunService:UnbindFromRenderStep(menuCursorBinding) end)
     attempt("cursor",stopCursor)
@@ -3216,4 +3402,4 @@ local function cleanup()
 end
 environment.VelionVDCleanup=cleanup
 playIntro()
-print("[XandMe V5.4.1] Compact bold ESP and independent name controls; Roblox runtime not tested.")
+print("[XandMe V5.4.2] User Features module integrated; Roblox runtime not tested.")
